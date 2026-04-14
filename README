@@ -1,0 +1,494 @@
+# MentorNepal — Backend PRD
+
+**Stack:** Express.js · SQLite3 (better-sqlite3) · better-auth · Custom In-Memory Cache · Daily.co (meetings)
+
+---
+
+## 1. Overview
+
+MentorNepal is a verified-mentor marketplace where Nepali professionals connect for 1:1 mentorship sessions. Mentees browse verified mentors, book 30/60-minute sessions, and join video calls via Daily.co rooms. The backend is a REST API consumed by the Next.js frontend.
+
+---
+
+## 2. Auth — better-auth
+
+Use `better-auth` with the following config:
+
+```ts
+import { betterAuth } from 'better-auth'
+import { db } from './db' // better-sqlite3 instance
+
+export const auth = betterAuth({
+  database: db,
+  emailAndPassword: { enabled: true },
+  emailVerification: {
+    sendVerificationEmail: async (user, url) => {
+      // send via Resend / SMTP
+    },
+    autoSignInAfterVerification: true,
+  },
+  session: {
+    expiresIn: 60 * 60 * 24 * 7, // 7 days
+    updateAge: 60 * 60 * 24,
+  },
+  user: {
+    additionalFields: {
+      role: { type: 'string', defaultValue: 'mentee' }, // 'mentee' | 'mentor' | 'admin'
+      onboardingComplete: { type: 'boolean', defaultValue: false },
+    },
+  },
+})
+```
+
+All protected routes use the `requireAuth` middleware that calls `auth.api.getSession()`. Role-gated routes additionally check `session.user.role`.
+
+---
+
+## 3. Database Schema (SQLite3)
+
+### 3.1 `users` (managed by better-auth)
+
+better-auth creates this automatically. Extended with `role` and `onboarding_complete` via `additionalFields`.
+
+### 3.2 `mentor_profiles`
+
+```sql
+CREATE TABLE mentor_profiles (
+  id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id         TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  full_name       TEXT NOT NULL,
+  headline        TEXT NOT NULL,                  -- "Senior SWE at Leapfrog Technology"
+  bio             TEXT NOT NULL,
+  avatar_url      TEXT,
+  linkedin_url    TEXT,
+  location        TEXT DEFAULT 'Kathmandu, Nepal',
+  languages       TEXT DEFAULT '["Nepali","English"]',  -- JSON array
+  expertise_tags  TEXT NOT NULL,                 -- JSON array: ["Backend","System Design"]
+  years_exp       INTEGER NOT NULL,
+  session_price   INTEGER DEFAULT 0,             -- NPR, 0 = free
+  is_verified     INTEGER DEFAULT 0,             -- 0 | 1
+  is_active       INTEGER DEFAULT 1,
+  total_sessions  INTEGER DEFAULT 0,
+  avg_rating      REAL DEFAULT 0.0,
+  review_count    INTEGER DEFAULT 0,
+  created_at      TEXT DEFAULT (datetime('now')),
+  updated_at      TEXT DEFAULT (datetime('now'))
+);
+```
+
+### 3.3 `mentee_profiles`
+
+```sql
+CREATE TABLE mentee_profiles (
+  id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id         TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  full_name       TEXT NOT NULL,
+  bio             TEXT,
+  avatar_url      TEXT,
+  goals           TEXT,                          -- JSON array: ["Get first job","Switch to ML"]
+  career_stage    TEXT,                          -- "student" | "early" | "mid" | "senior"
+  interests       TEXT,                          -- JSON array
+  created_at      TEXT DEFAULT (datetime('now')),
+  updated_at      TEXT DEFAULT (datetime('now'))
+);
+```
+
+### 3.4 `availability_slots`
+
+```sql
+CREATE TABLE availability_slots (
+  id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  mentor_id   TEXT NOT NULL REFERENCES mentor_profiles(id) ON DELETE CASCADE,
+  day_of_week INTEGER NOT NULL,  -- 0=Sun, 1=Mon ... 6=Sat
+  start_time  TEXT NOT NULL,     -- "09:00" (Nepal Time, UTC+5:45)
+  end_time    TEXT NOT NULL,     -- "10:00"
+  is_active   INTEGER DEFAULT 1,
+  UNIQUE(mentor_id, day_of_week, start_time)
+);
+```
+
+### 3.5 `sessions`
+
+```sql
+CREATE TABLE sessions (
+  id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  mentor_id       TEXT NOT NULL REFERENCES mentor_profiles(id),
+  mentee_id       TEXT NOT NULL REFERENCES mentee_profiles(id),
+  scheduled_at    TEXT NOT NULL,              -- ISO8601 UTC
+  duration_mins   INTEGER DEFAULT 30,         -- 30 | 60
+  status          TEXT DEFAULT 'pending',     -- pending | confirmed | completed | cancelled | no_show
+  meeting_url     TEXT,                       -- Daily.co room URL
+  daily_room_name TEXT,                       -- for deletion after session
+  topic           TEXT,                       -- what mentee wants to discuss
+  mentee_note     TEXT,
+  mentor_note     TEXT,
+  cancelled_by    TEXT,                       -- user_id
+  cancel_reason   TEXT,
+  created_at      TEXT DEFAULT (datetime('now')),
+  updated_at      TEXT DEFAULT (datetime('now'))
+);
+```
+
+### 3.6 `reviews`
+
+```sql
+CREATE TABLE reviews (
+  id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  session_id  TEXT NOT NULL UNIQUE REFERENCES sessions(id),
+  mentor_id   TEXT NOT NULL REFERENCES mentor_profiles(id),
+  mentee_id   TEXT NOT NULL REFERENCES mentee_profiles(id),
+  rating      INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  comment     TEXT,
+  is_public   INTEGER DEFAULT 1,
+  created_at  TEXT DEFAULT (datetime('now'))
+);
+```
+
+### 3.7 `verification_requests`
+
+```sql
+CREATE TABLE verification_requests (
+  id            TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  mentor_id     TEXT NOT NULL REFERENCES mentor_profiles(id),
+  linkedin_url  TEXT NOT NULL,
+  documents     TEXT,               -- JSON array of URLs (uploaded proof)
+  status        TEXT DEFAULT 'pending',  -- pending | approved | rejected
+  admin_note    TEXT,
+  reviewed_by   TEXT,               -- admin user_id
+  created_at    TEXT DEFAULT (datetime('now')),
+  updated_at    TEXT DEFAULT (datetime('now'))
+);
+```
+
+### 3.8 `notifications`
+
+```sql
+CREATE TABLE notifications (
+  id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type        TEXT NOT NULL,   -- 'session_booked' | 'session_confirmed' | 'session_reminder' | 'review_received'
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  data        TEXT,            -- JSON: { sessionId, etc. }
+  is_read     INTEGER DEFAULT 0,
+  created_at  TEXT DEFAULT (datetime('now'))
+);
+```
+
+---
+
+## 4. In-Memory Cache
+
+Custom LRU-style cache with TTL. Used for read-heavy, low-mutation data.
+
+```ts
+// cache.ts
+interface CacheEntry<T> {
+  value: T
+  expiresAt: number
+}
+
+class InMemoryCache {
+  private store = new Map<string, CacheEntry<any>>()
+
+  set<T>(key: string, value: T, ttlMs: number) {
+    this.store.set(key, { value, expiresAt: Date.now() + ttlMs })
+  }
+
+  get<T>(key: string): T | null {
+    const entry = this.store.get(key)
+    if (!entry) return null
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key)
+      return null
+    }
+    return entry.value as T
+  }
+
+  invalidate(pattern: string) {
+    for (const key of this.store.keys()) {
+      if (key.startsWith(pattern)) this.store.delete(key)
+    }
+  }
+}
+
+export const cache = new InMemoryCache()
+```
+
+**Cache keys and TTLs:**
+
+| Key                                          | TTL    | Invalidated on                          |
+| -------------------------------------------- | ------ | --------------------------------------- |
+| `mentors:list:{page}:{filters}`              | 5 min  | mentor profile update, new verification |
+| `mentor:profile:{mentorId}`                  | 10 min | profile update                          |
+| `mentor:reviews:{mentorId}:{page}`           | 10 min | new review                              |
+| `mentor:availability:{mentorId}:{weekStart}` | 2 min  | slot update, new booking                |
+| `stats:platform`                             | 30 min | any session completed                   |
+
+---
+
+## 5. API Routes
+
+### 5.1 Auth Routes (delegated to better-auth)
+
+```
+POST /api/auth/sign-up/email
+POST /api/auth/sign-in/email
+POST /api/auth/sign-out
+GET  /api/auth/session
+POST /api/auth/verify-email
+POST /api/auth/forget-password
+POST /api/auth/reset-password
+```
+
+Mount with: `app.all("/api/auth/*", (req, res) => auth.handler(req, res))`
+
+### 5.2 Onboarding
+
+```
+POST /api/onboarding/role          — set role (mentor|mentee), create profile row
+POST /api/onboarding/mentor        — save mentor profile fields
+POST /api/onboarding/mentee        — save mentee profile fields
+POST /api/onboarding/complete      — mark onboarding_complete = true
+```
+
+**Middleware:** `requireAuth` on all. After `POST /complete`, update `users.onboarding_complete = true` via better-auth's `updateUser`.
+
+### 5.3 Mentor Profiles
+
+```
+GET  /api/mentors                  — paginated list, filters: tags, verified, name search
+GET  /api/mentors/:mentorId        — public profile + reviews
+GET  /api/mentors/me               — own profile (auth required)
+PUT  /api/mentors/me               — update own profile (auth + role=mentor)
+```
+
+**Query params for list:** `page`, `limit`, `tags` (comma-separated), `verified`, `search`, `sort` (rating|sessions|newest).
+
+**Cache:** `GET /api/mentors` and `GET /api/mentors/:id` use cache before hitting DB.
+
+### 5.4 Availability
+
+```
+GET  /api/availability/:mentorId           — weekly slots + booked times
+PUT  /api/availability                     — mentor sets their weekly recurring slots
+GET  /api/availability/:mentorId/open      — open slots for a given week (?weekStart=ISO)
+```
+
+`GET /open` computes: recurring slots for that week - sessions already booked in that range.
+
+### 5.5 Sessions
+
+```
+POST   /api/sessions                — mentee books a session (creates Daily room)
+GET    /api/sessions                — own sessions (mentor sees all theirs, mentee sees theirs)
+GET    /api/sessions/:sessionId     — session detail (auth + participant)
+PATCH  /api/sessions/:sessionId/confirm   — mentor confirms (status: pending → confirmed)
+PATCH  /api/sessions/:sessionId/cancel   — either party cancels
+PATCH  /api/sessions/:sessionId/complete — mark completed (auto via webhook or cron)
+GET    /api/sessions/:sessionId/join     — returns meeting_url (only within 10min of start)
+```
+
+**Booking flow (`POST /api/sessions`):**
+
+1. Validate slot is still open (check DB, race-condition safe with SQLite exclusive transaction)
+2. Create Daily.co room via `POST https://api.daily.co/v1/rooms` with `exp` set to `scheduled_at + duration + 30min`
+3. Insert session row with `status: 'pending'`
+4. Send notification to mentor
+5. Return session object
+
+**Daily.co room creation:**
+
+```ts
+const room = await fetch('https://api.daily.co/v1/rooms', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.DAILY_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    name: `mentorship-${sessionId}`,
+    privacy: 'private',
+    properties: {
+      exp: Math.floor(scheduledAtUnix + durationSecs + 1800),
+      max_participants: 2,
+      enable_chat: true,
+      enable_screenshare: false,
+    },
+  }),
+})
+```
+
+### 5.6 Reviews
+
+```
+POST /api/reviews               — mentee submits review (session must be completed)
+GET  /api/reviews/:mentorId     — public reviews for a mentor (paginated)
+```
+
+After `POST /api/reviews`, update `mentor_profiles.avg_rating` and `review_count` atomically.
+
+### 5.7 Notifications
+
+```
+GET    /api/notifications         — own notifications (paginated, newest first)
+PATCH  /api/notifications/read    — mark all as read
+PATCH  /api/notifications/:id/read — mark one as read
+```
+
+### 5.8 Admin
+
+```
+GET    /api/admin/verification-requests           — list pending requests
+PATCH  /api/admin/verification-requests/:id       — approve/reject
+GET    /api/admin/users                           — list all users
+GET    /api/admin/stats                           — platform stats
+PATCH  /api/admin/mentors/:mentorId/suspend       — suspend mentor
+```
+
+All admin routes: `requireAuth` + `requireRole('admin')`.
+
+---
+
+## 6. Middleware Stack
+
+```ts
+app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }))
+app.use(express.json())
+app.use(helmet())
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 })) // per IP
+```
+
+**Custom middleware:**
+
+```ts
+// requireAuth.ts
+export async function requireAuth(req, res, next) {
+  const session = await auth.api.getSession({ headers: req.headers })
+  if (!session) return res.status(401).json({ error: 'Unauthorized' })
+  req.session = session
+  req.user = session.user
+  next()
+}
+
+// requireRole.ts
+export function requireRole(...roles: string[]) {
+  return (req, res, next) => {
+    if (!roles.includes(req.user.role))
+      return res.status(403).json({ error: 'Forbidden' })
+    next()
+  }
+}
+
+// requireOnboarding.ts — redirect if not onboarded
+export function requireOnboarding(req, res, next) {
+  if (!req.user.onboardingComplete) {
+    return res.status(403).json({ error: 'ONBOARDING_REQUIRED' })
+  }
+  next()
+}
+```
+
+---
+
+## 7. Background Jobs (simple setInterval, no queue lib)
+
+```ts
+// jobs.ts — start on server boot
+
+// 1. Session reminder notifications (runs every 5 min)
+// Finds sessions scheduled in next 24h with no reminder sent → create notification
+setInterval(sendSessionReminders, 5 * 60 * 1000)
+
+// 2. Auto-complete sessions (runs every 10 min)
+// Sessions where scheduled_at + duration has passed and status = 'confirmed' → mark 'completed'
+setInterval(autoCompleteSessions, 10 * 60 * 1000)
+
+// 3. Cache cleanup (runs every 30 min)
+// Any expired entries not yet evicted
+setInterval(() => cache.cleanup(), 30 * 60 * 1000)
+```
+
+---
+
+## 8. Environment Variables
+
+```env
+NODE_ENV=development
+PORT=3001
+DATABASE_URL=./data/mentornepal.db
+FRONTEND_URL=http://localhost:3000
+BETTER_AUTH_SECRET=<32+ char secret>
+BETTER_AUTH_URL=http://localhost:3001
+DAILY_API_KEY=<daily.co key>
+RESEND_API_KEY=<resend key>
+FROM_EMAIL=noreply@mentornepal.com
+```
+
+---
+
+## 9. Project Structure
+
+```
+backend/
+├── src/
+│   ├── index.ts              # app bootstrap
+│   ├── db.ts                 # better-sqlite3 connection + migrations
+│   ├── auth.ts               # better-auth config
+│   ├── cache.ts              # in-memory cache
+│   ├── middleware/
+│   │   ├── requireAuth.ts
+│   │   ├── requireRole.ts
+│   │   └── requireOnboarding.ts
+│   ├── routes/
+│   │   ├── onboarding.ts
+│   │   ├── mentors.ts
+│   │   ├── availability.ts
+│   │   ├── sessions.ts
+│   │   ├── reviews.ts
+│   │   ├── notifications.ts
+│   │   └── admin.ts
+│   ├── services/
+│   │   ├── daily.ts          # Daily.co API wrapper
+│   │   ├── email.ts          # Resend wrapper
+│   │   └── notifications.ts  # create + send notifications
+│   └── jobs.ts               # background job intervals
+├── migrations/
+│   └── 001_init.sql
+├── .env
+└── package.json
+```
+
+---
+
+## 10. Error Response Format
+
+All errors return:
+
+```json
+{
+  "error": "SLOT_TAKEN",
+  "message": "This time slot has already been booked."
+}
+```
+
+Standard error codes: `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_ERROR`, `SLOT_TAKEN`, `ONBOARDING_REQUIRED`, `ALREADY_REVIEWED`.
+
+---
+
+## 11. Rate Limiting
+
+| Route                      | Limit                 |
+| -------------------------- | --------------------- |
+| All `/api/*`               | 100 req / 15 min / IP |
+| `POST /api/sessions`       | 10 req / hour / user  |
+| `POST /api/reviews`        | 5 req / hour / user   |
+| `POST /api/auth/sign-in/*` | 10 req / 15 min / IP  |
+
+---
+
+## 12. Scope Boundary (v1)
+
+**In scope:** Auth, profiles, mentor browse, availability, session booking, Daily.co video, reviews, notifications, admin verification.
+
+**Out of scope for v1:** In-app messaging/chat, payments (eSewa/Khalti), push notifications, mobile app, mentor analytics dashboard, group sessions, resource sharing.
