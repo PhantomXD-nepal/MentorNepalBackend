@@ -3,4 +3,4 @@ import dotenv from 'dotenv'
 
 dotenv.config()
 
-export const db = drizzle(process.env.DATABASE_URL || 'data/db.db')
+export const db = drizzle(process.env.DATABASE_URL || './data/mentornepal.db')

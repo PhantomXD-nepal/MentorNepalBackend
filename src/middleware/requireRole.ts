@@ -11,14 +11,6 @@ export function requireRole(...roles: string[]) {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      if (!req.headers.authorization) {
-        res.status(401).json({
-          error: 'UNAUTHORIZED',
-          message: 'Authentication required',
-        })
-        return
-      }
-
       const userSession = await auth.api.getSession({
         headers: fromNodeHeaders(req.headers),
       })
@@ -58,7 +50,7 @@ export function requireRole(...roles: string[]) {
       req.user = {
         id: userData.id,
         email: userData.email,
-        role: userData.role,
+        role: role,
       } as any
 
       next()

@@ -119,7 +119,7 @@ export const accountRelations = relations(account, ({ one }) => ({
 export const mentorProfiles = sqliteTable('mentor_profiles', {
   id: text('id')
     .primaryKey()
-    .$defaultFn(() => sql`(lower(hex(randomblob(16))))`),
+    .default(sql`(lower(hex(randomblob(16))))`),
   userId: text('user_id')
     .notNull()
     .unique()
@@ -140,6 +140,8 @@ export const mentorProfiles = sqliteTable('mentor_profiles', {
   avgRating: real('avg_rating').default(0.0),
   reviewCount: integer('review_count').default(0),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
+  // NOTE: updatedAt must be manually set in all update queries (e.g., updatedAt: new Date().toISOString())
+  // SQLite does not support ON UPDATE triggers natively, so this must be handled in application code
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 })
 
@@ -147,7 +149,7 @@ export const mentorProfiles = sqliteTable('mentor_profiles', {
 export const menteeProfiles = sqliteTable('mentee_profiles', {
   id: text('id')
     .primaryKey()
-    .$defaultFn(() => sql`(lower(hex(randomblob(16))))`),
+    .default(sql`(lower(hex(randomblob(16))))`),
   userId: text('user_id')
     .notNull()
     .unique()
@@ -161,6 +163,8 @@ export const menteeProfiles = sqliteTable('mentee_profiles', {
   >(),
   interests: text('interests'), // JSON string
   createdAt: text('created_at').default(sql`(datetime('now'))`),
+  // NOTE: updatedAt must be manually set in all update queries (e.g., updatedAt: new Date().toISOString())
+  // SQLite does not support ON UPDATE triggers natively, so this must be handled in application code
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 })
 
@@ -170,7 +174,7 @@ export const availabilitySlots = sqliteTable(
   {
     id: text('id')
       .primaryKey()
-      .$defaultFn(() => sql`(lower(hex(randomblob(16))))`),
+      .default(sql`(lower(hex(randomblob(16))))`),
     mentorId: text('mentor_id')
       .notNull()
       .references(() => mentorProfiles.id, { onDelete: 'cascade' }),
@@ -188,7 +192,7 @@ export const availabilitySlots = sqliteTable(
 export const sessions = sqliteTable('sessions', {
   id: text('id')
     .primaryKey()
-    .$defaultFn(() => sql`(lower(hex(randomblob(16))))`),
+    .default(sql`(lower(hex(randomblob(16))))`),
   mentorId: text('mentor_id')
     .notNull()
     .references(() => mentorProfiles.id),
@@ -208,6 +212,8 @@ export const sessions = sqliteTable('sessions', {
   cancelledBy: text('cancelled_by').references(() => user.id),
   cancelReason: text('cancel_reason'),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
+  // NOTE: updatedAt must be manually set in all update queries (e.g., updatedAt: new Date().toISOString())
+  // SQLite does not support ON UPDATE triggers natively, so this must be handled in application code
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 })
 
@@ -215,7 +221,7 @@ export const sessions = sqliteTable('sessions', {
 export const reviews = sqliteTable('reviews', {
   id: text('id')
     .primaryKey()
-    .$defaultFn(() => sql`(lower(hex(randomblob(16))))`),
+    .default(sql`(lower(hex(randomblob(16))))`),
   sessionId: text('session_id')
     .notNull()
     .unique()
@@ -236,7 +242,7 @@ export const reviews = sqliteTable('reviews', {
 export const verificationRequests = sqliteTable('verification_requests', {
   id: text('id')
     .primaryKey()
-    .$defaultFn(() => sql`(lower(hex(randomblob(16))))`),
+    .default(sql`(lower(hex(randomblob(16))))`),
   mentorId: text('mentor_id')
     .notNull()
     .references(() => mentorProfiles.id),
@@ -248,6 +254,8 @@ export const verificationRequests = sqliteTable('verification_requests', {
   adminNote: text('admin_note'),
   reviewedBy: text('reviewed_by').references(() => user.id),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
+  // NOTE: updatedAt must be manually set in all update queries (e.g., updatedAt: new Date().toISOString())
+  // SQLite does not support ON UPDATE triggers natively, so this must be handled in application code
   updatedAt: text('updated_at').default(sql`(datetime('now'))`),
 })
 
@@ -255,7 +263,7 @@ export const verificationRequests = sqliteTable('verification_requests', {
 export const notifications = sqliteTable('notifications', {
   id: text('id')
     .primaryKey()
-    .$defaultFn(() => sql`(lower(hex(randomblob(16))))`),
+    .default(sql`(lower(hex(randomblob(16))))`),
   userId: text('user_id')
     .notNull()
     .references(() => user.id, { onDelete: 'cascade' }),

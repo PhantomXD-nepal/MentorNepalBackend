@@ -1,9 +1,3 @@
-DROP TABLE `availability_slots`;--> statement-breakpoint
-DROP TABLE `mentee_profiles`;--> statement-breakpoint
-DROP TABLE `mentor_profiles`;--> statement-breakpoint
-DROP TABLE `notifications`;--> statement-breakpoint
-DROP TABLE `reviews`;--> statement-breakpoint
-DROP TABLE `sessions`;--> statement-breakpoint
-DROP TABLE `verification_requests`;--> statement-breakpoint
-ALTER TABLE `user` DROP COLUMN `role`;--> statement-breakpoint
-ALTER TABLE `user` DROP COLUMN `onboarding_complete`;
+-- Migration reverted: These tables and columns are still in use by the application
+-- DO NOT drop tables or columns that are actively referenced in the codebase
+-- This migration has been intentionally left empty to preserve data integrity

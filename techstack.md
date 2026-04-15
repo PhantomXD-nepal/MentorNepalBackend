@@ -144,7 +144,7 @@ Using **Drizzle ORM** with **better-auth drizzle adapter**:
 ```ts
 // auth.ts
 import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { db } from "@/db"; // your drizzle instance
 
 export const auth = betterAuth({

@@ -337,24 +337,15 @@ router.post('/mentor', requireRole('mentor'), async (req, res) => {
   }
 })
 
-router.post('/mentee', requireAuth, async (req, res) => {
+router.post('/mentee', requireRole('mentee'), async (req, res) => {
   try {
     logger.debug(
       {
         userId: req.user?.id,
-        email: req.user?.email,
         role: req.user?.role,
-        onboardingComplete: req.user?.onboardingComplete,
       },
       'Mentee profile - User details:',
     )
-
-    if (req.user!.role !== 'mentee') {
-      return res.status(403).json({
-        error: 'FORBIDDEN',
-        message: 'Only mentees can access this endpoint',
-      })
-    }
 
     const parsed = menteeProfileSchema.safeParse(req.body)
     if (!parsed.success) {
