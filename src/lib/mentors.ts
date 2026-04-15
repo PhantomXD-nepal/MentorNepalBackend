@@ -1,7 +1,8 @@
 import { db } from '../db'
 import { mentorProfiles } from '../schema'
-import { and, gte, lte, like, sql } from 'drizzle-orm'
+import { and, gte, lte, like, sql, eq } from 'drizzle-orm'
 import { cache } from '../cache'
+import { logger } from '../logger'
 
 type FetchMentorsParams = {
   page?: number
@@ -77,6 +78,54 @@ export async function fetchMentors(params: FetchMentorsParams = {}) {
   }
 
   await cache.set(key, result, 60)
+
+  return result
+}
+
+export async function getMentorDetailsById(mentorId: string) {
+  const key = `mentor:details:${mentorId}`
+
+  const cached = await cache.get(key)
+  if (cached) return cached
+
+  const data = await db
+    .select({
+      id: mentorProfiles.id,
+      userId: mentorProfiles.userId,
+      fullName: mentorProfiles.fullName,
+      headline: mentorProfiles.headline,
+      bio: mentorProfiles.bio,
+      avatarUrl: mentorProfiles.avatarUrl,
+      linkedinUrl: mentorProfiles.linkedinUrl,
+      location: mentorProfiles.location,
+      languages: mentorProfiles.languages,
+      expertise: mentorProfiles.expertiseTags,
+      yearsExp: mentorProfiles.yearsExp,
+      sessionPrice: mentorProfiles.sessionPrice,
+      isVerified: mentorProfiles.isVerified,
+      isActive: mentorProfiles.isActive,
+      totalSessions: mentorProfiles.totalSessions,
+      avgRating: mentorProfiles.avgRating,
+      reviewCount: mentorProfiles.reviewCount,
+      createdAt: mentorProfiles.createdAt,
+      updatedAt: mentorProfiles.updatedAt,
+    })
+    .from(mentorProfiles)
+    .where(eq(mentorProfiles.id, mentorId))
+    .limit(1)
+
+  const mentor = data[0]
+
+  if (!mentor) return null
+
+  const result = {
+    ...mentor,
+    expertise: mentor.expertise ? JSON.parse(mentor.expertise) : [],
+    languages: mentor.languages ? JSON.parse(mentor.languages) : [],
+    verified: Boolean(mentor.isVerified),
+  }
+
+  await cache.set(key, result, 60 * 10)
 
   return result
 }

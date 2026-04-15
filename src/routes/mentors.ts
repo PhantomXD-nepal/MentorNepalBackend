@@ -4,7 +4,7 @@ import { db } from '../db'
 import { logger } from '../logger'
 import { and, gte, like, lte, sql } from 'drizzle-orm'
 import { mentorProfiles } from '../schema'
-import { fetchMentors } from '../lib/mentors'
+import { fetchMentors, getMentorDetailsById } from '../lib/mentors'
 
 const router = Router()
 
@@ -164,8 +164,12 @@ router.get('/', requireAuth, async (req, res) => {
  *       404:
  *         description: Mentor not found
  */
-router.get('/:mentorId', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.get('/:mentorId', async (req, res) => {
+  try {
+    res.json(await getMentorDetailsById(req.params.mentorId))
+  } catch (error) {
+    logger.error(`Error when getting a mentor from id ${error}`)
+  }
 })
 
 /**
