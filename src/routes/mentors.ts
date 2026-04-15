@@ -1,4 +1,10 @@
 import { Router } from 'express'
+import { requireAuth } from '../middleware'
+import { db } from '../db'
+import { logger } from '../logger'
+import { and, gte, like, lte, sql } from 'drizzle-orm'
+import { mentorProfiles } from '../schema'
+import { fetchMentors } from '../lib/mentors'
 
 const router = Router()
 
@@ -128,8 +134,12 @@ const router = Router()
  *                     totalPages:
  *                       type: integer
  */
-router.get('/', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.get('/', requireAuth, async (req, res) => {
+  try {
+    res.json(await fetchMentors())
+  } catch (error) {
+    logger.error(`Error during fetching mentors ${error}`)
+  }
 })
 
 /**
