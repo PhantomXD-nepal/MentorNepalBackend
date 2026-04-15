@@ -1,10 +1,14 @@
 import { Router } from 'express'
-import { requireAuth } from '../middleware'
+import { requireAuth, requireRole } from '../middleware'
 import { db } from '../db'
 import { logger } from '../logger'
 import { and, gte, like, lte, sql } from 'drizzle-orm'
 import { mentorProfiles } from '../schema'
-import { fetchMentors, getMentorDetailsById } from '../lib/mentors'
+import {
+  fetchMentors,
+  getMentorDetailsById,
+  getMentorDetailsByUserId,
+} from '../lib/mentors'
 
 const router = Router()
 
@@ -144,6 +148,55 @@ router.get('/', requireAuth, async (req, res) => {
 
 /**
  * @swagger
+ * /api/mentors/me:
+ *   get:
+ *     summary: Get current mentor's profile
+ *     tags: [Mentors]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Mentor profile
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/MentorProfile'
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: User is not a mentor
+ */
+router.get('/me', requireRole('mentor'), async (req, res) => {
+  try {
+    const userId = req.user?.id
+
+    if (!userId) {
+      return res.status(401).json({
+        error: 'UNAUTHORIZED',
+        message: 'Missing user in request context',
+      })
+    }
+
+    const mentorProfile = await getMentorDetailsByUserId(userId)
+
+    if (!mentorProfile) {
+      return res.status(404).json({
+        error: 'NOT_FOUND',
+        message: 'Mentor profile not found',
+      })
+    }
+
+    res.json(mentorProfile)
+  } catch (err) {
+    res.status(500).json({
+      error: 'INTERNAL_ERROR',
+      message: 'Failed to fetch mentor profile',
+    })
+  }
+})
+
+/**
+ * @swagger
  * /api/mentors/{mentorId}:
  *   get:
  *     summary: Get mentor profile by ID (cached)
@@ -170,30 +223,6 @@ router.get('/:mentorId', async (req, res) => {
   } catch (error) {
     logger.error(`Error when getting a mentor from id ${error}`)
   }
-})
-
-/**
- * @swagger
- * /api/mentors/me:
- *   get:
- *     summary: Get current mentor's profile
- *     tags: [Mentors]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Mentor profile
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/MentorProfile'
- *       401:
- *         description: Not authenticated
- *       403:
- *         description: User is not a mentor
- */
-router.get('/me', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
 })
 
 /**
@@ -233,8 +262,35 @@ router.get('/me', (req, res) => {
  *       403:
  *         description: User is not a mentor
  */
-router.put('/me', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.put('/me', requireRole('mentor'), async (req, res) => {
+  try {
+    const userId = req.user?.id
+
+    if (!userId) {
+      return res.status(401).json({
+        error: 'UNAUTHORIZED',
+        message: 'Missing user context',
+      })
+    }
+
+    const { expertise, experience, hourlyRate, bio, company, title } = req.body
+
+    const updated = await db.update(mentorProfiles).set({
+      expertise,
+      experience,
+      hourlyRate,
+      bio,
+      company,
+      title,
+      updatedAt: sql`(datetime('now'))`,
+    })
+    res.json(updated)
+  } catch (err) {
+    res.status(500).json({
+      error: 'INTERNAL_ERROR',
+      message: 'Failed to update mentor profile',
+    })
+  }
 })
 
 export default router

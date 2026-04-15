@@ -129,3 +129,50 @@ export async function getMentorDetailsById(mentorId: string) {
 
   return result
 }
+
+export async function getMentorDetailsByUserId(userId: string) {
+  const key = `mentor:details:user:${userId}`
+
+  const cached = await cache.get(key)
+  if (cached) return cached
+
+  const data = await db
+    .select({
+      id: mentorProfiles.id,
+      userId: mentorProfiles.userId,
+      fullName: mentorProfiles.fullName,
+      headline: mentorProfiles.headline,
+      bio: mentorProfiles.bio,
+      avatarUrl: mentorProfiles.avatarUrl,
+      linkedinUrl: mentorProfiles.linkedinUrl,
+      location: mentorProfiles.location,
+      languages: mentorProfiles.languages,
+      expertise: mentorProfiles.expertiseTags,
+      yearsExp: mentorProfiles.yearsExp,
+      sessionPrice: mentorProfiles.sessionPrice,
+      isVerified: mentorProfiles.isVerified,
+      isActive: mentorProfiles.isActive,
+      totalSessions: mentorProfiles.totalSessions,
+      avgRating: mentorProfiles.avgRating,
+      reviewCount: mentorProfiles.reviewCount,
+      createdAt: mentorProfiles.createdAt,
+      updatedAt: mentorProfiles.updatedAt,
+    })
+    .from(mentorProfiles)
+    .where(eq(mentorProfiles.userId, userId))
+    .limit(1)
+
+  const mentor = data[0]
+  if (!mentor) return null
+
+  const result = {
+    ...mentor,
+    expertise: mentor.expertise ? JSON.parse(mentor.expertise) : [],
+    languages: mentor.languages ? JSON.parse(mentor.languages) : [],
+    verified: Boolean(mentor.isVerified),
+  }
+
+  await cache.set(key, result, 600)
+
+  return result
+}
