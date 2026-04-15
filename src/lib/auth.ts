@@ -18,6 +18,7 @@ export async function getUserDetailsFromEmail(
   // 1. Check cache
   const cached = cache.get<UserDetails>(cacheKey)
   if (cached) {
+    console.log(cached)
     return cached
   }
 

@@ -1,13 +1,13 @@
 import { Router } from 'express'
-import { requireAuth } from '../middleware'
+import { requireAuth, requireRole } from '../middleware'
 
 import { z } from 'zod'
 import { logger } from '../logger'
 import { db } from '../db'
-import { menteeProfiles, sessions } from '../schema'
+import { menteeProfiles, mentorProfiles, sessions } from '../schema'
 import { and, eq, or, sql } from 'drizzle-orm'
-import { getMentorDetailsById } from '../lib/mentors'
-import { getProfilesForUser } from '../lib/session'
+import { getMentorDetailsById, getMentorDetailsByUserId } from '../lib/mentors'
+import { assertParticipant, getProfilesForUser } from '../lib/session'
 
 // ---- Schemas ----
 
@@ -386,8 +386,36 @@ router.get('/', requireAuth, async (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.get('/:sessionId', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.get('/:sessionId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+    const session = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, req.params.sessionId))
+      .get()
+
+    if (!session)
+      return res
+        .status(404)
+        .json({ error: 'NOT_FOUND', message: 'Session not found' })
+
+    const { mentor, mentee } = await getProfilesForUser(userId)
+    const participant = assertParticipant(session, mentor?.id, mentee?.id)
+
+    if (!participant)
+      return res
+        .status(403)
+        .json({ error: 'FORBIDDEN', message: 'Not authorized' })
+
+    return res.json(session)
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch session' })
+  }
 })
 
 /**
@@ -416,8 +444,46 @@ router.get('/:sessionId', (req, res) => {
  *       409:
  *         description: Session already confirmed/cancelled
  */
-router.patch('/:sessionId/confirm', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
+  try {
+    const userId = req.user?.id
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+    const session = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, req.params.sessionId))
+      .get()
+
+    const mentorProfile =
+      (await getMentorDetailsById(userId)) ||
+      (await getMentorDetailsByUserId(userId))
+
+    if (!session)
+      return res
+        .status(404)
+        .json({ error: 'NOT_FOUND', message: 'Session not found' })
+    if (session.mentorId !== mentorProfile?.id)
+      return res
+        .status(403)
+        .json({ error: 'FORBIDDEN', message: 'Not your session' })
+    if (session.status !== 'pending') {
+      return res.status(409).json({
+        error: 'CONFLICT',
+        message: `Session is already ${session.status}`,
+      })
+    }
+    const updated = await db
+      .update(sessions)
+      .set({ status: 'confirmed', updatedAt: sql`(datetime('now'))` })
+      .where(eq(sessions.id, session.id))
+      .returning()
+      .get()
+
+    return res.json(updated)
+  } catch (error) {
+    logger.error(`Error when confirming meeting/session ${error}`)
+  }
 })
 
 /**
@@ -452,8 +518,52 @@ router.patch('/:sessionId/confirm', (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.patch('/:sessionId/cancel', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.patch('/:sessionId/cancel', requireRole('mentor'), async (req, res) => {
+  try {
+    const userId = req.user?.id
+
+    const session = db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, req.params.sessionId))
+      .get()
+
+    if (!session)
+      return res
+        .status(404)
+        .json({ error: 'NOT_FOUND', message: 'Session Not Found' })
+
+    const { mentor, mentee } = await getProfilesForUser(userId)
+    const participant = assertParticipant(session, mentor?.id, mentee?.id)
+
+    if (!participant)
+      return res
+        .status(403)
+        .json({ error: 'FORBIDDEN', message: 'no participants' })
+
+    if (session.status === 'cancelled' || session.status === 'completed') {
+      return res.status(409).json({
+        error: 'CONFLICT',
+        message: 'Session is already completed or is cancelled',
+      })
+    }
+
+    const updated = await db
+      .update(sessions)
+      .set({
+        status: 'cancelled',
+        cancelledBy: userId,
+        cancelReason: req.body.reason ?? null,
+        updatedAt: sql`(datetime('now'))`,
+      })
+      .where(eq(sessions.id, session.id))
+      .returning()
+      .get()
+
+    return res.json(updated)
+  } catch (error) {
+    logger.error(`Error cancelling session ${error}`)
+  }
 })
 
 /**
@@ -480,15 +590,69 @@ router.patch('/:sessionId/cancel', (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.patch('/:sessionId/complete', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.patch('/:sessionId/complete', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+    const mentorProfile = await db
+      .select()
+      .from(mentorProfiles)
+      .where(eq(mentorProfiles.userId, userId))
+      .get()
+
+    if (!mentorProfile)
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Only mentors can complete sessions',
+      })
+
+    const session = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, req.params.sessionId))
+      .get()
+
+    if (!session)
+      return res
+        .status(404)
+        .json({ error: 'NOT_FOUND', message: 'Session not found' })
+    if (session.mentorId !== mentorProfile.id)
+      return res
+        .status(403)
+        .json({ error: 'FORBIDDEN', message: 'Not your session' })
+
+    if (session.status !== 'confirmed') {
+      return res.status(409).json({
+        error: 'CONFLICT',
+        message: 'Only confirmed sessions can be completed',
+      })
+    }
+
+    const [updated] = await Promise.all([
+      db
+        .update(sessions)
+        .set({ status: 'completed', updatedAt: sql`(datetime('now'))` })
+        .where(eq(sessions.id, session.id))
+        .returning()
+        .get(),
+      db
+        .update(mentorProfiles)
+        .set({ totalSessions: sql`${mentorProfiles.totalSessions} + 1` })
+        .where(eq(mentorProfiles.id, mentorProfile.id)),
+    ])
+
+    return res.json(updated)
+  } catch (error) {
+    logger.error(`Error when completing session ${error}`)
+  }
 })
 
 /**
  * @swagger
  * /api/sessions/{sessionId}/join:
  *   get:
- *     summary: Get Daily.co room URL to join session
+ *     summary: Get room URL to join session
  *     tags: [Sessions]
  *     security:
  *       - bearerAuth: []
@@ -517,8 +681,60 @@ router.patch('/:sessionId/complete', (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.get('/:sessionId/join', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.get('/:sessionId/join', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+    const session = db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, req.params.sessionId))
+      .get()
+
+    if (!session)
+      return res
+        .status(404)
+        .json({ error: 'NOT_FOUND', message: 'Session not found' })
+
+    const { mentor, mentee } = await getProfilesForUser(userId)
+    const participant = assertParticipant(session, mentor?.id, mentee?.id)
+
+    if (!participant)
+      return res
+        .status(403)
+        .json({ error: 'FORBIDDEN', message: 'Not authorized' })
+
+    if (session.status !== 'confirmed') {
+      return res
+        .status(403)
+        .json({ error: 'FORBIDDEN', message: 'Session is not confirmed' })
+    }
+
+    // Allow joining 5 minutes early, block after session should have ended
+    const now = Date.now()
+    const start = new Date(session.scheduledAt).getTime()
+    const end = start + (session.durationMins ?? 30) * 60000
+    const EARLY_JOIN_MS = 5 * 60 * 1000
+
+    if (now < start - EARLY_JOIN_MS) {
+      return res
+        .status(403)
+        .json({ error: 'TOO_EARLY', message: 'Session has not started yet' })
+    }
+
+    if (now > end) {
+      return res
+        .status(403)
+        .json({ error: 'EXPIRED', message: 'Session has already ended' })
+    }
+
+    return res.json({ roomUrl: session.meetingUrl })
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: 'INTERNAL_ERROR', message: 'Failed to get room URL' })
+  }
 })
 
 export default router

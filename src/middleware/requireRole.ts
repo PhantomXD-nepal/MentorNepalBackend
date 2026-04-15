@@ -23,8 +23,6 @@ export function requireRole(...roles: string[]) {
         headers: fromNodeHeaders(req.headers),
       })
 
-      logger.debug(userSession)
-
       if (!userSession) {
         res.status(401).json({
           error: 'UNAUTHORIZED',
@@ -34,6 +32,7 @@ export function requireRole(...roles: string[]) {
       }
 
       const userData = await getUserDetailsFromEmail(userSession.user.email)
+      logger.debug(userData)
 
       if (!userData) {
         res.status(401).json({
