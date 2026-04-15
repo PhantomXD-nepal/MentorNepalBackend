@@ -11,16 +11,18 @@
 
 ### Database
 
-| Technology     | Purpose                | Details              |
-| -------------- | ---------------------- | -------------------- |
-| better-sqlite3 | SQLite database driver | Synchronous, fast    |
-| SQLite         | Embedded database      | File-based, no setup |
+| Technology | Purpose | Details |
+| ---------- | ---------------------- | -------------------- |
+| Drizzle ORM | Type-safe SQL ORM | TypeScript-first, lightweight |
+| SQLite | Embedded database | File-based, no setup |
+| drizzle-kit | Schema management | Migrations, generate, push |
 
 ### Authentication
 
-| Technology  | Purpose                  | Details                                      |
+| Technology | Purpose | Details |
 | ----------- | ------------------------ | -------------------------------------------- |
 | better-auth | Authentication framework | Email/password, sessions, email verification |
+| drizzleAdapter | better-auth adapter | Integration with Drizzle ORM |
 
 ### Caching
 
@@ -59,16 +61,48 @@
 
 ### Development
 
-| Package    | Purpose                 |
+| Package | Purpose |
 | ---------- | ----------------------- |
-| typescript | Type safety             |
-| ts-node    | Run TypeScript directly |
-| dotenv     | Environment variables   |
+| typescript | Type safety |
+| tsx | Run TypeScript directly |
+| dotenv | Environment variables |
+| drizzle-kit | Schema management |
 
 ---
 
 ## Project Structure
 
+```
+backend/
+├── src/
+│   ├── index.ts          # App bootstrap
+│   ├── db.ts             # Drizzle ORM connection + schema
+│   ├── schema.ts         # Drizzle table definitions
+│   ├── auth.ts           # better-auth config with drizzleAdapter
+│   ├── cache.ts          # In-memory cache
+│   ├── middleware/
+│   │   ├── requireAuth.ts
+│   │   ├── requireRole.ts
+│   │   └── requireOnboarding.ts
+│   ├── routes/
+│   │   ├── auth.ts
+│   │   ├── onboarding.ts
+│   │   ├── mentors.ts
+│   │   ├── availability.ts
+│   │   ├── sessions.ts
+│   │   ├── reviews.ts
+│   │   ├── notifications.ts
+│   │   └── admin.ts
+│   ├── services/
+│   │   ├── daily.ts      # Daily.co API wrapper
+│   │   ├── email.ts      # Resend wrapper
+│   │   └── notifications.ts
+│   └── jobs.ts           # Background job intervals
+├── drizzle/              # Drizzle migrations
+│   ├── schema.ts
+│   └── migrations/
+├── .env
+└── package.json
 ```
 backend/
 ├── src/
@@ -103,9 +137,27 @@ backend/
 
 ## Database Schema
 
+### Setup
+
+Using **Drizzle ORM** with **better-auth drizzle adapter**:
+
+```ts
+// auth.ts
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { db } from "@/db"; // your drizzle instance
+
+export const auth = betterAuth({
+  database: drizzleAdapter(db, { provider: "sqlite" }),
+});
+```
+
+Generate better-auth schema: `npx auth@latest generate`
+Apply migrations: `npx drizzle-kit migrate` or `npx auth@latest migrate`
+
 ### Tables Created
 
-1. **users** (managed by better-auth) - Extended with role, onboarding_complete
+1. **users** (managed by better-auth via Drizzle adapter) - Extended with role, onboarding_complete
 2. **mentor_profiles** - Mentor details, expertise, pricing, verification status
 3. **mentee_profiles** - Mentee details, goals, career stage
 4. **availability_slots** - Mentor weekly recurring availability
