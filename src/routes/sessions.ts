@@ -7,6 +7,7 @@ import { db } from '../db'
 import { menteeProfiles, sessions } from '../schema'
 import { and, eq, or, sql } from 'drizzle-orm'
 import { getMentorDetailsById } from '../lib/mentors'
+import { getProfilesForUser } from '../lib/session'
 
 // ---- Schemas ----
 
@@ -299,8 +300,62 @@ router.post('/', requireAuth, async (req, res) => {
  *       401:
  *         description: Not authenticated
  */
-router.get('/', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.get('/', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id
+
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+    const { status, role } = req.query
+    const page = Math.max(1, parseInt(req.query.page as string) || 1)
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 20),
+    )
+    const offset = (page - 1) * limit
+
+    const { mentor, mentee } = await getProfilesForUser(userId)
+    let roleFilter
+    if (role === 'mentor' && mentor) {
+      roleFilter = eq(sessions.mentorId, mentor.id)
+    } else if (role === 'mentee' && mentee) {
+      roleFilter = eq(sessions.menteeId, mentee.id)
+    } else {
+      // Return sessions where user is either participant
+      const conditions = []
+      if (mentor) conditions.push(eq(sessions.mentorId, mentor.id))
+      if (mentee) conditions.push(eq(sessions.menteeId, mentee.id))
+      if (conditions.length === 0)
+        return res.json({
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 },
+        })
+      roleFilter = conditions.length === 1 ? conditions[0] : or(...conditions)
+    }
+
+    const statusFilter = status
+      ? eq(sessions.status, status as string)
+      : undefined
+    const where = statusFilter ? and(roleFilter, statusFilter) : roleFilter
+
+    const [data, countResult] = await Promise.all([
+      db.select().from(sessions).where(where).limit(limit).offset(offset).all(),
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(sessions)
+        .where(where)
+        .get(),
+    ])
+
+    const total = countResult?.count ?? 0
+
+    return res.json({
+      data,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    })
+  } catch (error) {
+    logger.error(`Error fetching user sessions ${error}`)
+  }
 })
 
 /**

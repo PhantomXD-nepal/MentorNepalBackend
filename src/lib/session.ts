@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '../db'
 import { menteeProfiles, mentorProfiles, sessions } from '../schema'
 
-async function getProfilesForUser(userId: string) {
+export async function getProfilesForUser(userId: string) {
   const [mentor, mentee] = await Promise.all([
     db
       .select()
