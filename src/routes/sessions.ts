@@ -459,9 +459,7 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
       .where(eq(sessions.id, req.params.sessionId))
       .get()
 
-    const mentorProfile =
-      (await getMentorDetailsById(userId)) ||
-      (await getMentorDetailsByUserId(userId))
+    const mentorProfile = await getMentorDetailsByUserId(userId)
 
     if (!session)
       return res
