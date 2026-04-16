@@ -1,73 +1,18 @@
 import { Router } from 'express'
-import { requireAuth, requireRole } from '../middleware'
+import { requireAuth, requireRole, validate } from '../middleware'
 
-import { z } from 'zod'
 import { logger } from '../logger'
 import { db } from '../db'
 import { menteeProfiles, mentorProfiles, sessions } from '../schema'
 import { and, eq, or, sql } from 'drizzle-orm'
 import { getMentorDetailsById, getMentorDetailsByUserId } from '../lib/mentors'
 import { assertParticipant, getProfilesForUser } from '../lib/session'
-
-// ---- Schemas ----
-
-export const bookSessionSchema = z.object({
-  body: z
-    .object({
-      mentorId: z.string().min(1, 'mentorId is required'),
-      startTime: z
-        .string()
-        .datetime({ message: 'startTime must be a valid ISO 8601 datetime' }),
-      endTime: z
-        .string()
-        .datetime({ message: 'endTime must be a valid ISO 8601 datetime' }),
-      topic: z.string().max(200).optional(),
-      notes: z.string().max(1000).optional(),
-    })
-    .refine(data => new Date(data.endTime) > new Date(data.startTime), {
-      message: 'endTime must be after startTime',
-      path: ['endTime'],
-    })
-    .refine(
-      data => {
-        const mins =
-          (new Date(data.endTime).getTime() -
-            new Date(data.startTime).getTime()) /
-          60000
-        return mins >= 15 && mins <= 120
-      },
-      {
-        message: 'Session must be between 15 and 120 minutes',
-        path: ['endTime'],
-      },
-    ),
-})
-
-export const cancelSessionSchema = z.object({
-  body: z.object({
-    reason: z.string().max(500).optional(),
-  }),
-  params: z.object({
-    sessionId: z.string().min(1),
-  }),
-})
-
-export const sessionIdParamSchema = z.object({
-  params: z.object({
-    sessionId: z.string().min(1),
-  }),
-})
-
-export const getSessionsQuerySchema = z.object({
-  query: z.object({
-    status: z
-      .enum(['pending', 'confirmed', 'cancelled', 'completed'])
-      .optional(),
-    role: z.enum(['mentor', 'mentee']).optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-  }),
-})
+import {
+  bookSessionSchema,
+  cancelSessionSchema,
+  sessionIdParamSchema,
+  getSessionsQuerySchema,
+} from '../validation'
 
 const router = Router()
 
@@ -162,24 +107,12 @@ const router = Router()
  *       429:
  *         description: Rate limit exceeded (10 req/hour)
  */
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
   try {
     const userId = req.user?.id
 
     const { mentorId, startTime, endTime, topic, notes } = req.body
-    const result = bookSessionSchema.safeParse({
-      body: req.body,
-      query: req.query,
-      params: req.params,
-    })
 
-    if (!result.success) {
-      return res.status(400).json({
-        error: 'VALIDATION_ERROR',
-        message: 'Invalid request',
-        details: result.error.flatten().fieldErrors,
-      })
-    }
     const start = new Date(startTime)
     const end = new Date(endTime)
 
@@ -236,7 +169,7 @@ router.post('/', requireAuth, async (req, res) => {
     const roomName = crypto.randomUUID()
     const meetingUrl = `https://meet.jit.si/${roomName}`
 
-    const newSession = await db.transaction(async tx => {
+    const newSession = await db.transaction(tx => {
       return tx
         .insert(sessions)
         .values({
@@ -524,7 +457,7 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.patch('/:sessionId/cancel', requireRole('mentor'), async (req, res) => {
+router.patch('/:sessionId/cancel', requireAuth, async (req, res) => {
   try {
     const userId = req.user?.id
 

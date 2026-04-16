@@ -1,4 +1,14 @@
 import { Router } from 'express'
+import {
+  createReviewSchema,
+  getMentorReviewsSchema,
+} from '../validation/reviews'
+import { requireAuth, requireRole, validate } from '../middleware'
+import { db } from '../db'
+import { menteeProfiles, mentorProfiles, reviews, sessions } from '../schema'
+import { and, eq, sql } from 'drizzle-orm'
+import { logger } from '../logger'
+import { cache, CacheKeys, CacheTTL } from '../cache'
 
 const router = Router()
 
@@ -81,9 +91,110 @@ const router = Router()
  *       429:
  *         description: Rate limit exceeded (5 req/hour)
  */
-router.post('/', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
-})
+// POST /api/reviews
+router.post(
+  '/',
+  requireAuth,
+  validate(createReviewSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+      const { sessionId, rating, content } = req.body
+
+      const menteeProfile = await db
+        .select()
+        .from(menteeProfiles)
+        .where(eq(menteeProfiles.userId, userId))
+        .get()
+
+      if (!menteeProfile) {
+        return res.status(403).json({
+          error: 'FORBIDDEN',
+          message: 'Only mentees can leave reviews',
+        })
+      }
+
+      const session = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .get()
+
+      if (!session) {
+        return res
+          .status(404)
+          .json({ error: 'NOT_FOUND', message: 'Session not found' })
+      }
+
+      if (session.menteeId !== menteeProfile.id) {
+        return res.status(403).json({
+          error: 'FORBIDDEN',
+          message: 'You were not part of this session',
+        })
+      }
+
+      if (session.status !== 'completed') {
+        return res
+          .status(403)
+          .json({ error: 'FORBIDDEN', message: 'Session is not completed yet' })
+      }
+
+      const existing = await db
+        .select()
+        .from(reviews)
+        .where(eq(reviews.sessionId, sessionId))
+        .get()
+
+      if (existing) {
+        return res.status(409).json({
+          error: 'ALREADY_REVIEWED',
+          message: 'Session has already been reviewed',
+        })
+      }
+
+      const newReview = await db
+        .insert(reviews)
+        .values({
+          sessionId,
+          mentorId: session.mentorId,
+          menteeId: menteeProfile.id,
+          rating,
+          comment: content ?? null,
+        })
+        .returning()
+        .get()
+
+      await db
+        .update(mentorProfiles)
+        .set({
+          reviewCount: sql`${mentorProfiles.reviewCount} + 1`,
+          avgRating: sql`
+          ROUND(
+            (${mentorProfiles.avgRating} * ${mentorProfiles.reviewCount} + ${rating})
+            / (${mentorProfiles.reviewCount} + 1),
+            2
+          )
+        `,
+        })
+        .where(eq(mentorProfiles.id, session.mentorId))
+
+      // Invalidate all cached review pages and the mentor profile for this mentor
+      // since avgRating and reviewCount have changed
+      cache.deletePattern(
+        CacheKeys.mentorReviews(session.mentorId, 0).replace(':0', ''),
+      )
+      cache.delete(CacheKeys.mentorProfile(session.mentorId))
+
+      return res.status(201).json(newReview)
+    } catch (err) {
+      return res
+        .status(500)
+        .json({ error: 'INTERNAL_ERROR', message: 'Failed to submit review' })
+    }
+  },
+)
 
 /**
  * @swagger
@@ -131,8 +242,69 @@ router.post('/', (req, res) => {
  *       404:
  *         description: Mentor not found
  */
-router.get('/:mentorId', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
+  try {
+    const { mentorId } = req.params
+    const { page, limit } = req.query as unknown as {
+      page: number
+      limit: number
+    }
+    const offset = (page - 1) * limit
+
+    const cacheKey = CacheKeys.mentorReviews(mentorId, page)
+    const cached = cache.get(cacheKey)
+    if (cached) return res.json(cached)
+
+    const mentor = await db
+      .select()
+      .from(mentorProfiles)
+      .where(eq(mentorProfiles.id, mentorId))
+      .get()
+
+    if (!mentor) {
+      return res
+        .status(404)
+        .json({ error: 'NOT_FOUND', message: 'Mentor not found' })
+    }
+
+    const where = and(
+      eq(reviews.mentorId, mentorId),
+      eq(reviews.isPublic, true),
+    )
+
+    const [data, countResult] = await Promise.all([
+      db.select().from(reviews).where(where).limit(limit).offset(offset).all(),
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(reviews)
+        .where(where)
+        .get(),
+    ])
+
+    const total = countResult?.count ?? 0
+
+    const payload = {
+      data,
+      stats: {
+        average: mentor.avgRating,
+        total: mentor.reviewCount,
+      },
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    }
+
+    cache.set(cacheKey, payload, CacheTTL.MENTOR_REVIEWS)
+
+    return res.json(payload)
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch reviews' })
+  }
 })
 
 export default router

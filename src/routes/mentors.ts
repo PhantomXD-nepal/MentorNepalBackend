@@ -1,5 +1,6 @@
 import { Router } from 'express'
-import { requireAuth, requireRole } from '../middleware'
+import { requireAuth, requireRole, validate } from '../middleware'
+import { updateMentorProfileSchema } from '../validation'
 import { db } from '../db'
 import { logger } from '../logger'
 import { and, gte, like, lte, sql } from 'drizzle-orm'
@@ -262,7 +263,7 @@ router.get('/:mentorId', async (req, res) => {
  *       403:
  *         description: User is not a mentor
  */
-router.put('/me', requireRole('mentor'), async (req, res) => {
+router.put('/me', requireRole('mentor'), validate(updateMentorProfileSchema), async (req, res) => {
   try {
     const userId = req.user?.id
 
