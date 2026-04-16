@@ -141,53 +141,64 @@ router.post(
           .json({ error: 'FORBIDDEN', message: 'Session is not completed yet' })
       }
 
-      const existing = await db
-        .select()
-        .from(reviews)
-        .where(eq(reviews.sessionId, sessionId))
-        .get()
+      const newReview = await db.transaction(async tx => {
+        const existing = await tx
+          .select()
+          .from(reviews)
+          .where(eq(reviews.sessionId, sessionId))
+          .get()
 
-      if (existing) {
+        if (existing) {
+          tx.rollback()
+          return null
+        }
+
+        const review = await tx
+          .insert(reviews)
+          .values({
+            sessionId,
+            mentorId: session.mentorId,
+            menteeId: menteeProfile.id,
+            rating,
+            comment: content ?? null,
+          })
+          .returning()
+          .get()
+
+        await tx
+          .update(mentorProfiles)
+          .set({
+            reviewCount: sql`${mentorProfiles.reviewCount} + 1`,
+            avgRating: sql`
+            ROUND(
+              (${mentorProfiles.avgRating} * ${mentorProfiles.reviewCount} + ${rating})
+              / (${mentorProfiles.reviewCount} + 1),
+              2
+            )
+          `,
+          })
+          .where(eq(mentorProfiles.id, session.mentorId))
+
+        return review
+      })
+
+      if (!newReview) {
         return res.status(409).json({
           error: 'ALREADY_REVIEWED',
           message: 'Session has already been reviewed',
         })
       }
 
-      const newReview = await db
-        .insert(reviews)
-        .values({
-          sessionId,
-          mentorId: session.mentorId,
-          menteeId: menteeProfile.id,
-          rating,
-          comment: content ?? null,
-        })
-        .returning()
-        .get()
-
-      await db
-        .update(mentorProfiles)
-        .set({
-          reviewCount: sql`${mentorProfiles.reviewCount} + 1`,
-          avgRating: sql`
-          ROUND(
-            (${mentorProfiles.avgRating} * ${mentorProfiles.reviewCount} + ${rating})
-            / (${mentorProfiles.reviewCount} + 1),
-            2
-          )
-        `,
-        })
-        .where(eq(mentorProfiles.id, session.mentorId))
-
       // Invalidate all cached review pages and the mentor profile for this mentor
       // since avgRating and reviewCount have changed
-      cache.deletePattern(
-        CacheKeys.mentorReviews(session.mentorId, 0).replace(':0', ''),
-      )
+      cache.deletePattern(`mentor:reviews:${session.mentorId}`)
       cache.delete(CacheKeys.mentorProfile(session.mentorId))
 
-      return res.status(201).json(newReview)
+      return res.status(201).json({
+        ...newReview,
+        content: newReview.comment,
+        comment: undefined,
+      })
     } catch (err) {
       return res
         .status(500)
@@ -244,7 +255,10 @@ router.post(
  */
 router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
   try {
-    const { mentorId } = req.params
+    const mentorId = req.params.mentorId
+    if (Array.isArray(mentorId)) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid mentor ID' })
+    }
     const { page, limit } = req.query as unknown as {
       page: number
       limit: number
@@ -284,7 +298,11 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
     const total = countResult?.count ?? 0
 
     const payload = {
-      data,
+      data: data.map(review => ({
+        ...review,
+        content: review.comment,
+        comment: undefined,
+      })),
       stats: {
         average: mentor.avgRating,
         total: mentor.reviewCount,

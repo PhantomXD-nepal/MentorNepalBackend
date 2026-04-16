@@ -4,7 +4,7 @@ import { requireAuth, requireRole, validate } from '../middleware'
 import { logger } from '../logger'
 import { db } from '../db'
 import { menteeProfiles, mentorProfiles, sessions } from '../schema'
-import { and, eq, or, sql } from 'drizzle-orm'
+import { and, eq, inArray, or, sql } from 'drizzle-orm'
 import { getMentorDetailsById, getMentorDetailsByUserId } from '../lib/mentors'
 import { assertParticipant, getProfilesForUser } from '../lib/session'
 import {
@@ -111,6 +111,10 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
   try {
     const userId = req.user?.id
 
+    if (!userId) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' })
+    }
+
     const { mentorId, startTime, endTime, topic, notes } = req.body
 
     const start = new Date(startTime)
@@ -125,7 +129,7 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
 
     const durationMins = Math.round((end.getTime() - start.getTime()) / 60000)
 
-    const menteeProfile = db
+    const menteeProfile = await db
       .select()
       .from(menteeProfiles)
       .where(eq(menteeProfiles.userId, userId))
@@ -272,17 +276,18 @@ router.get('/', requireAuth, async (req, res) => {
       roleFilter = conditions.length === 1 ? conditions[0] : or(...conditions)
     }
 
-    const statusFilter = status
-      ? eq(sessions.status, status as string)
+    const statusValue = Array.isArray(status) ? status[0] : status
+    const statusFilter = statusValue
+      ? eq(sessions.status, statusValue as "completed" | "pending" | "confirmed" | "cancelled" | "no_show")
       : undefined
-    const where = statusFilter ? and(roleFilter, statusFilter) : roleFilter
+    const whereClause = statusFilter ? and(roleFilter, statusFilter) : roleFilter
 
     const [data, countResult] = await Promise.all([
-      db.select().from(sessions).where(where).limit(limit).offset(offset).all(),
+      db.select().from(sessions).where(whereClause).limit(limit).offset(offset).all(),
       db
         .select({ count: sql<number>`count(*)` })
         .from(sessions)
-        .where(where)
+        .where(whereClause)
         .get(),
     ])
 
@@ -331,10 +336,15 @@ router.get('/:sessionId', requireAuth, async (req, res) => {
     const userId = req.user?.id
     if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
+    const sessionId = req.params.sessionId
+    if (Array.isArray(sessionId)) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
+    }
+
     const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     if (!session)
@@ -389,10 +399,15 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
     const userId = req.user?.id
     if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
+    const sessionId = req.params.sessionId
+    if (Array.isArray(sessionId)) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
+    }
+
     const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     const mentorProfile = await getMentorDetailsByUserId(userId)
@@ -401,7 +416,7 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
       return res
         .status(404)
         .json({ error: 'NOT_FOUND', message: 'Session not found' })
-    if (session.mentorId !== mentorProfile?.id)
+    if (!mentorProfile || session.mentorId !== (mentorProfile as { id: string }).id)
       return res
         .status(403)
         .json({ error: 'FORBIDDEN', message: 'Not your session' })
@@ -457,14 +472,20 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.patch('/:sessionId/cancel', requireAuth, async (req, res) => {
+router.patch('/:sessionId/cancel', requireAuth, validate(cancelSessionSchema), async (req, res) => {
   try {
     const userId = req.user?.id
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const session = db
+    const sessionId = req.params.sessionId
+    if (Array.isArray(sessionId)) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
+    }
+
+    const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     if (!session)
@@ -547,10 +568,15 @@ router.patch('/:sessionId/complete', requireAuth, async (req, res) => {
         message: 'Only mentors can complete sessions',
       })
 
+    const sessionId = req.params.sessionId
+    if (Array.isArray(sessionId)) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
+    }
+
     const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     if (!session)
@@ -627,10 +653,15 @@ router.get('/:sessionId/join', requireAuth, async (req, res) => {
     const userId = req.user?.id
     if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
+    const sessionId = req.params.sessionId
+    if (Array.isArray(sessionId)) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
+    }
+
     const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     if (!session)

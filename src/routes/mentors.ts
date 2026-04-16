@@ -3,7 +3,7 @@ import { requireAuth, requireRole, validate } from '../middleware'
 import { updateMentorProfileSchema } from '../validation'
 import { db } from '../db'
 import { logger } from '../logger'
-import { and, gte, like, lte, sql } from 'drizzle-orm'
+import { and, eq, gte, like, lte, sql } from 'drizzle-orm'
 import { mentorProfiles } from '../schema'
 import {
   fetchMentors,
@@ -274,17 +274,24 @@ router.put('/me', requireRole('mentor'), validate(updateMentorProfileSchema), as
       })
     }
 
-    const { expertise, experience, hourlyRate, bio, company, title } = req.body
+    const { expertiseTags, yearsExp, sessionPrice, bio, fullName, headline, avatarUrl, linkedinUrl, location, languages } = req.body
 
-    const updated = await db.update(mentorProfiles).set({
-      expertise,
-      experience,
-      hourlyRate,
-      bio,
-      company,
-      title,
+    const updateData: Record<string, any> = {
       updatedAt: sql`(datetime('now'))`,
-    })
+    }
+
+    if (expertiseTags !== undefined) updateData.expertiseTags = JSON.stringify(expertiseTags)
+    if (yearsExp !== undefined) updateData.yearsExp = yearsExp
+    if (sessionPrice !== undefined) updateData.sessionPrice = sessionPrice
+    if (bio !== undefined) updateData.bio = bio
+    if (fullName !== undefined) updateData.fullName = fullName
+    if (headline !== undefined) updateData.headline = headline
+    if (avatarUrl !== undefined) updateData.avatarUrl = avatarUrl
+    if (linkedinUrl !== undefined) updateData.linkedinUrl = linkedinUrl
+    if (location !== undefined) updateData.location = location
+    if (languages !== undefined) updateData.languages = JSON.stringify(languages)
+
+    const updated = await db.update(mentorProfiles).set(updateData).where(eq(mentorProfiles.userId, userId)).returning().get()
     res.json(updated)
   } catch (err) {
     res.status(500).json({
