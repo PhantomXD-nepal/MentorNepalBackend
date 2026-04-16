@@ -23,8 +23,6 @@ export function requireRole(...roles: string[]) {
         headers: fromNodeHeaders(req.headers),
       })
 
-      logger.debug(userSession)
-
       if (!userSession) {
         res.status(401).json({
           error: 'UNAUTHORIZED',
@@ -42,6 +40,8 @@ export function requireRole(...roles: string[]) {
         })
         return
       }
+
+      logger.debug({ userId: userData.id }, 'requireRole: user loaded')
 
       let role = userData.role
 

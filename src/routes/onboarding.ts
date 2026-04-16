@@ -337,7 +337,7 @@ router.post('/mentor', requireRole('mentor'), async (req, res) => {
   }
 })
 
-router.post('/mentee', requireAuth, async (req, res) => {
+router.post('/mentee', requireRole('mentee'), async (req, res) => {
   try {
     logger.debug(
       {
@@ -348,13 +348,6 @@ router.post('/mentee', requireAuth, async (req, res) => {
       },
       'Mentee profile - User details:',
     )
-
-    if (req.user!.role !== 'mentee') {
-      return res.status(403).json({
-        error: 'FORBIDDEN',
-        message: 'Only mentees can access this endpoint',
-      })
-    }
 
     const parsed = menteeProfileSchema.safeParse(req.body)
     if (!parsed.success) {
@@ -376,18 +369,40 @@ router.post('/mentee', requireAuth, async (req, res) => {
       'Creating mentee profile with data:',
     )
 
-    await db
-      .update(menteeProfiles)
-      .set({
-        fullName: data.fullName,
-        goals: JSON.stringify(data.goals),
-        careerStage: data.careerStage,
-        interests: data.interests ? JSON.stringify(data.interests) : undefined,
-        bio: data.bio,
-        avatarUrl: data.avatarUrl,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(menteeProfiles.userId, req.user!.id))
+    try {
+      await db
+        .insert(menteeProfiles)
+        .values({
+          userId: req.user!.id,
+          fullName: data.fullName,
+          goals: JSON.stringify(data.goals),
+          careerStage: data.careerStage,
+          interests: data.interests
+            ? JSON.stringify(data.interests)
+            : undefined,
+          bio: data.bio,
+          avatarUrl: data.avatarUrl,
+          updatedAt: new Date().toISOString(),
+          // createdAt: new Date().toISOString(), // if needed
+        })
+        .onConflictDoUpdate({
+          target: menteeProfiles.userId,
+          set: {
+            fullName: data.fullName,
+            goals: JSON.stringify(data.goals),
+            careerStage: data.careerStage,
+            interests: data.interests
+              ? JSON.stringify(data.interests)
+              : undefined,
+            bio: data.bio,
+            avatarUrl: data.avatarUrl,
+            updatedAt: new Date().toISOString(),
+          },
+        })
+} catch (error) {
+logger.error(`Error when upserting mentee profile: ${error}`)
+throw error
+}
 
     res.json({ message: 'Mentee profile created' })
   } catch (error) {
