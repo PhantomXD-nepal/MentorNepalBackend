@@ -1,5 +1,6 @@
+// middleware/zodValidation.ts
 import { Request, Response, NextFunction } from 'express'
-import { ZodSchema, ZodError } from 'zod'
+import { ZodSchema } from 'zod'
 
 export function validate(schema: ZodSchema) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -17,10 +18,27 @@ export function validate(schema: ZodSchema) {
       })
     }
 
-    // Write coerced/defaulted values back onto the request
-    if (result.data.body) req.body = result.data.body
-    if (result.data.query) req.query = result.data.query as typeof req.query
-    if (result.data.params) req.params = result.data.params
+    // req.body is writable, assign directly
+    if (result.data.body) {
+      req.body = result.data.body
+    }
+
+    // req.query and req.params are read-only getters — override with defineProperty
+    if (result.data.query) {
+      Object.defineProperty(req, 'query', {
+        value: result.data.query,
+        writable: true,
+        configurable: true,
+      })
+    }
+
+    if (result.data.params) {
+      Object.defineProperty(req, 'params', {
+        value: result.data.params,
+        writable: true,
+        configurable: true,
+      })
+    }
 
     next()
   }

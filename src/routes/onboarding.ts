@@ -1,8 +1,13 @@
 import { Router } from 'express'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { auth } from '../auth'
 import { db } from '../db'
-import { user, mentorProfiles, menteeProfiles } from '../schema'
+import {
+  user,
+  mentorProfiles,
+  menteeProfiles,
+  verificationRequests,
+} from '../schema'
 import { requireAuth } from '../middleware/requireAuth'
 import { fromNodeHeaders } from 'better-auth/node'
 import { logger } from '../logger'
@@ -255,91 +260,109 @@ router.post('/role', requireAuth, validate(roleSchema), async (req, res) => {
   }
 })
 
-router.post('/mentor', requireRole('mentor'), validate(mentorProfileSchema), async (req, res) => {
-  try {
-    const data = req.body
-
-    logger.debug(
-      {
-        fullName: data.fullName,
-        headline: data.headline,
-        expertise: data.expertise,
-        yearsExp: data.yearsExp,
-        hourlyRate: data.hourlyRate,
-      },
-      'Creating mentor profile with data:',
-    )
-
-    await db
-      .update(mentorProfiles)
-      .set({
-        fullName: data.fullName,
-        headline: data.headline,
-        bio: data.bio,
-        expertiseTags: JSON.stringify(data.expertise),
-        yearsExp: data.yearsExp,
-        sessionPrice: data.hourlyRate,
-        avatarUrl: data.avatarUrl,
-        linkedinUrl: data.linkedinUrl,
-        location: data.location,
-        languages: data.languages ? JSON.stringify(data.languages) : undefined,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(mentorProfiles.userId, req.user!.id))
-
-    res.json({ message: 'Mentor profile created' })
-  } catch (error) {
-    console.error('Error creating mentor profile:', error)
-    res.status(500).json({
-      error: 'INTERNAL_ERROR',
-      message: 'Failed to create mentor profile',
-    })
-  }
-})
-
-router.post('/mentee', requireRole('mentee'), validate(menteeProfileSchema), async (req, res) => {
-  try {
-    logger.debug(
-      {
-        userId: req.user?.id,
-        email: req.user?.email,
-        role: req.user?.role,
-        onboardingComplete: req.user?.onboardingComplete,
-      },
-      'Mentee profile - User details:',
-    )
-
-    const data = req.body
-
-    logger.debug(
-      {
-        fullName: data.fullName,
-        careerStage: data.careerStage,
-        goals: data.goals,
-        interests: data.interests,
-      },
-      'Creating mentee profile with data:',
-    )
-
+router.post(
+  '/mentor',
+  requireRole('mentor'),
+  validate(mentorProfileSchema),
+  async (req, res) => {
     try {
-      await db
-        .insert(menteeProfiles)
-        .values({
-          userId: req.user!.id,
+      const data = req.body
+
+      logger.debug(
+        {
           fullName: data.fullName,
-          goals: JSON.stringify(data.goals),
+          headline: data.headline,
+          expertise: data.expertise,
+          yearsExp: data.yearsExp,
+          hourlyRate: data.hourlyRate,
+        },
+        'Creating mentor profile with data:',
+      )
+
+      await db.transaction(tx => {
+        // Update the mentor profile and get back its id
+        const updatedMentor = tx
+          .update(mentorProfiles)
+          .set({
+            fullName: data.fullName,
+            headline: data.headline,
+            bio: data.bio,
+            expertiseTags: JSON.stringify(data.expertise),
+            yearsExp: data.yearsExp,
+            sessionPrice: data.hourlyRate,
+            avatarUrl: data.avatarUrl ?? null,
+            linkedinUrl: data.linkedinUrl ?? null,
+            location: data.location ?? null,
+            languages: data.languages ? JSON.stringify(data.languages) : null,
+            updatedAt: sql`(datetime('now'))`,
+          })
+          .where(eq(mentorProfiles.userId, req.user!.id))
+          .returning()
+          .get()
+
+        if (!updatedMentor) {
+          throw new Error('Mentor profile not found')
+        }
+
+        // Only create a verification request if one doesn't already exist
+        const existingRequest = tx
+          .select()
+          .from(verificationRequests)
+          .where(eq(verificationRequests.mentorId, updatedMentor.id))
+          .get()
+
+        if (!existingRequest) {
+          tx.insert(verificationRequests).values({
+            mentorId: updatedMentor.id,
+            linkedinUrl: data.linkedinUrl ?? '',
+            status: 'pending',
+          })
+        }
+      })
+
+      res.json({ message: 'Mentor profile created' })
+    } catch (error) {
+      logger.error(`Error creating mentor profile: ${error}`)
+      res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to create mentor profile',
+      })
+    }
+  },
+)
+router.post(
+  '/mentee',
+  requireRole('mentee'),
+  validate(menteeProfileSchema),
+  async (req, res) => {
+    try {
+      logger.debug(
+        {
+          userId: req.user?.id,
+          email: req.user?.email,
+          role: req.user?.role,
+          onboardingComplete: req.user?.onboardingComplete,
+        },
+        'Mentee profile - User details:',
+      )
+
+      const data = req.body
+
+      logger.debug(
+        {
+          fullName: data.fullName,
           careerStage: data.careerStage,
-          interests: data.interests
-            ? JSON.stringify(data.interests)
-            : undefined,
-          bio: data.bio,
-          avatarUrl: data.avatarUrl,
-          updatedAt: new Date().toISOString(),
-          // createdAt: new Date().toISOString(), // if needed
-        })
-        .onConflictDoUpdate({
-          target: menteeProfiles.userId,
-          set: {
+          goals: data.goals,
+          interests: data.interests,
+        },
+        'Creating mentee profile with data:',
+      )
+
+      try {
+        await db
+          .insert(menteeProfiles)
+          .values({
+            userId: req.user!.id,
             fullName: data.fullName,
             goals: JSON.stringify(data.goals),
             careerStage: data.careerStage,
@@ -349,22 +372,37 @@ router.post('/mentee', requireRole('mentee'), validate(menteeProfileSchema), asy
             bio: data.bio,
             avatarUrl: data.avatarUrl,
             updatedAt: new Date().toISOString(),
-          },
-        })
-} catch (error) {
-logger.error(`Error when upserting mentee profile: ${error}`)
-throw error
-}
+            // createdAt: new Date().toISOString(), // if needed
+          })
+          .onConflictDoUpdate({
+            target: menteeProfiles.userId,
+            set: {
+              fullName: data.fullName,
+              goals: JSON.stringify(data.goals),
+              careerStage: data.careerStage,
+              interests: data.interests
+                ? JSON.stringify(data.interests)
+                : undefined,
+              bio: data.bio,
+              avatarUrl: data.avatarUrl,
+              updatedAt: new Date().toISOString(),
+            },
+          })
+      } catch (error) {
+        logger.error(`Error when upserting mentee profile: ${error}`)
+        throw error
+      }
 
-    res.json({ message: 'Mentee profile created' })
-  } catch (error) {
-    console.error('Error creating mentee profile:', error)
-    res.status(500).json({
-      error: 'INTERNAL_ERROR',
-      message: 'Failed to create mentee profile',
-    })
-  }
-})
+      res.json({ message: 'Mentee profile created' })
+    } catch (error) {
+      console.error('Error creating mentee profile:', error)
+      res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to create mentee profile',
+      })
+    }
+  },
+)
 
 router.post('/complete', requireAuth, async (req, res) => {
   try {
