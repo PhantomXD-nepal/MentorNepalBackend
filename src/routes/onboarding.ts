@@ -1,14 +1,18 @@
 import { Router } from 'express'
 import { eq } from 'drizzle-orm'
-import { z } from 'zod'
 import { auth } from '../auth'
 import { db } from '../db'
 import { user, mentorProfiles, menteeProfiles } from '../schema'
 import { requireAuth } from '../middleware/requireAuth'
 import { fromNodeHeaders } from 'better-auth/node'
 import { logger } from '../logger'
-import { requireRole } from '../middleware'
+import { requireRole, validate } from '../middleware'
 import { getUserDetailsFromEmail } from '../lib/auth'
+import {
+  roleSchema,
+  mentorProfileSchema,
+  menteeProfileSchema,
+} from '../validation'
 
 const router = Router()
 
@@ -201,45 +205,10 @@ const router = Router()
  *       401:
  *         description: Unauthorized
  */
-const roleSchema = z.object({
-  role: z.enum(['mentor', 'mentee']),
-})
 
-const mentorProfileSchema = z.object({
-  fullName: z.string().min(1),
-  headline: z.string().min(1),
-  bio: z.string().min(10),
-  expertise: z.array(z.string()).min(1),
-  yearsExp: z.number().int().min(0),
-  hourlyRate: z.number().int().min(0).default(0),
-  company: z.string().optional(),
-  title: z.string().optional(),
-  avatarUrl: z.string().url().optional(),
-  linkedinUrl: z.string().url().optional(),
-  location: z.string().optional(),
-  languages: z.array(z.string()).optional(),
-})
-
-const menteeProfileSchema = z.object({
-  fullName: z.string().min(1),
-  goals: z.array(z.string()).min(1),
-  careerStage: z.enum(['student', 'early', 'mid', 'senior']),
-  interests: z.array(z.string()).optional(),
-  bio: z.string().optional(),
-  avatarUrl: z.string().url().optional(),
-})
-
-router.post('/role', requireAuth, async (req, res) => {
+router.post('/role', requireAuth, validate(roleSchema), async (req, res) => {
   try {
-    const parsed = roleSchema.safeParse(req.body)
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'VALIDATION_ERROR',
-        message: 'Invalid role. Must be mentor or mentee',
-      })
-    }
-
-    const { role } = parsed.data
+    const { role } = req.body
 
     await db.update(user).set({ role }).where(eq(user.id, req.user!.id))
 
@@ -286,18 +255,9 @@ router.post('/role', requireAuth, async (req, res) => {
   }
 })
 
-router.post('/mentor', requireRole('mentor'), async (req, res) => {
+router.post('/mentor', requireRole('mentor'), validate(mentorProfileSchema), async (req, res) => {
   try {
-    const parsed = mentorProfileSchema.safeParse(req.body)
-    logger.debug(parsed)
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'VALIDATION_ERROR',
-        message: parsed.error.errors[0]?.message || 'Invalid input',
-      })
-    }
-
-    const data = parsed.data
+    const data = req.body
 
     logger.debug(
       {
@@ -337,7 +297,7 @@ router.post('/mentor', requireRole('mentor'), async (req, res) => {
   }
 })
 
-router.post('/mentee', requireRole('mentee'), async (req, res) => {
+router.post('/mentee', requireRole('mentee'), validate(menteeProfileSchema), async (req, res) => {
   try {
     logger.debug(
       {
@@ -349,15 +309,7 @@ router.post('/mentee', requireRole('mentee'), async (req, res) => {
       'Mentee profile - User details:',
     )
 
-    const parsed = menteeProfileSchema.safeParse(req.body)
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'VALIDATION_ERROR',
-        message: parsed.error.errors[0]?.message || 'Invalid input',
-      })
-    }
-
-    const data = parsed.data
+    const data = req.body
 
     logger.debug(
       {
