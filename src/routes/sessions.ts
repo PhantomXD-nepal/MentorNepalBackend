@@ -462,9 +462,7 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
       .where(eq(sessions.id, req.params.sessionId))
       .get()
 
-    const mentorProfile =
-      (await getMentorDetailsById(userId)) ||
-      (await getMentorDetailsByUserId(userId))
+    const mentorProfile = await getMentorDetailsByUserId(userId)
 
     if (!session)
       return res
@@ -696,7 +694,7 @@ router.get('/:sessionId/join', requireAuth, async (req, res) => {
     const userId = req.user?.id
     if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const session = db
+    const session = await db
       .select()
       .from(sessions)
       .where(eq(sessions.id, req.params.sessionId))
