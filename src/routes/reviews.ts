@@ -3,10 +3,10 @@ import {
   createReviewSchema,
   getMentorReviewsSchema,
 } from '../validation/reviews'
-import { requireAuth, requireRole, validate } from '../middleware'
+import { requireAuth, validate } from '../middleware'
 import { db } from '../db'
 import { menteeProfiles, mentorProfiles, reviews, sessions } from '../schema'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { logger } from '../logger'
 import { cache, CacheKeys, CacheTTL } from '../cache'
 
@@ -149,8 +149,7 @@ router.post(
           .get()
 
         if (existing) {
-          tx.rollback()
-          return null
+          throw new Error('ALREADY_REVIEWED')
         }
 
         const review = await tx
@@ -200,6 +199,14 @@ router.post(
         comment: undefined,
       })
     } catch (err) {
+      if (err instanceof Error && err.message === 'ALREADY_REVIEWED') {
+        return res.status(409).json({
+          error: 'ALREADY_REVIEWED',
+          message: 'Session has already been reviewed',
+        })
+      }
+
+      logger.error({ err }, 'Failed to submit review')
       return res
         .status(500)
         .json({ error: 'INTERNAL_ERROR', message: 'Failed to submit review' })
@@ -255,17 +262,14 @@ router.post(
  */
 router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
   try {
-    const mentorId = req.params.mentorId
-    if (Array.isArray(mentorId)) {
-      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid mentor ID' })
-    }
+    const { mentorId } = req.params as { mentorId: string }
     const { page, limit } = req.query as unknown as {
       page: number
       limit: number
     }
     const offset = (page - 1) * limit
 
-    const cacheKey = CacheKeys.mentorReviews(mentorId, page)
+    const cacheKey = CacheKeys.mentorReviews(mentorId, page, limit)
     const cached = cache.get(cacheKey)
     if (cached) return res.json(cached)
 
@@ -287,7 +291,14 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
     )
 
     const [data, countResult] = await Promise.all([
-      db.select().from(reviews).where(where).limit(limit).offset(offset).all(),
+      db
+        .select()
+        .from(reviews)
+        .where(where)
+        .orderBy(desc(reviews.createdAt))
+        .limit(limit)
+        .offset(offset)
+        .all(),
       db
         .select({ count: sql<number>`count(*)` })
         .from(reviews)
@@ -319,6 +330,7 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
 
     return res.json(payload)
   } catch (err) {
+    logger.error({ err }, 'Failed to fetch reviews')
     return res
       .status(500)
       .json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch reviews' })
