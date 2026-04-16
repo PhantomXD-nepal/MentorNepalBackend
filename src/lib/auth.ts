@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '../db'
 import { cache } from '../cache'
 import { user } from '../schema'
+import { logger } from '../logger'
 
 type UserDetails = {
   id: string
@@ -15,12 +16,12 @@ export async function getUserDetailsFromEmail(
 ): Promise<UserDetails | null> {
   const cacheKey = `user:email:${email}`
 
-  // 1. Check cache
-  const cached = cache.get<UserDetails>(cacheKey)
-  if (cached) {
-    console.log(cached)
-    return cached
-  }
+// 1. Check cache
+const cached = cache.get<UserDetails>(cacheKey)
+if (cached) {
+logger.debug({ userId: cached.id }, 'cache hit for user')
+return cached
+}
 
   // 2. Query DB
   const result = await db

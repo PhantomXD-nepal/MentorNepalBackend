@@ -32,7 +32,6 @@ export function requireRole(...roles: string[]) {
       }
 
       const userData = await getUserDetailsFromEmail(userSession.user.email)
-      logger.debug(userData)
 
       if (!userData) {
         res.status(401).json({
@@ -41,6 +40,8 @@ export function requireRole(...roles: string[]) {
         })
         return
       }
+
+      logger.debug({ userId: userData.id }, 'requireRole: user loaded')
 
       let role = userData.role
 

@@ -399,9 +399,10 @@ router.post('/mentee', requireRole('mentee'), async (req, res) => {
             updatedAt: new Date().toISOString(),
           },
         })
-    } catch (error) {
-      logger.error(`Error when upserting mentee profile: ${error}`)
-    }
+} catch (error) {
+logger.error(`Error when upserting mentee profile: ${error}`)
+throw error
+}
 
     res.json({ message: 'Mentee profile created' })
   } catch (error) {
