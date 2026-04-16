@@ -210,50 +210,53 @@ router.post('/', requireAuth, async (req, res) => {
         .status(404)
         .json({ error: 'NOT_FOUND', mesage: 'Mentor not found' })
     }
-const scheduledAtISO = start.toISOString()
-const conflict = db
-.select()
-.from(sessions)
-.where(
-and(
-or(eq(sessions.mentorId, mentorId), eq(sessions.menteeId, menteeProfile.id)),
-or(eq(sessions.status, 'pending'), eq(sessions.status, 'confirmed')),
-// Overlap: existing.scheduledAt < end AND existing.scheduledAt + duration > start
-sql`datetime(${sessions.scheduledAt}) < datetime(${end.toISOString()})`,
-sql`datetime(${sessions.scheduledAt}, '+' || ${sessions.durationMins} || ' minutes') > datetime(${scheduledAtISO})`,
-),
-)
-.get()
+    const scheduledAtISO = start.toISOString()
+    const conflict = await db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          or(
+            eq(sessions.mentorId, mentorId),
+            eq(sessions.menteeId, menteeProfile.id),
+          ),
+          or(eq(sessions.status, 'pending'), eq(sessions.status, 'confirmed')),
+          // Overlap: existing.scheduledAt < end AND existing.scheduledAt + duration > start
+          sql`datetime(${sessions.scheduledAt}) < datetime(${end.toISOString()})`,
+          sql`datetime(${sessions.scheduledAt}, '+' || ${sessions.durationMins} || ' minutes') > datetime(${scheduledAtISO})`,
+        ),
+      )
+      .get()
 
-if (conflict) {
-return res
-.status(409)
-.json({ error: 'CONFLICT', message: 'Time slot is not available' })
-}
-const roomName = crypto.randomUUID()
-const meetingUrl = `https://meet.jit.si/${roomName}`
+    if (conflict) {
+      return res
+        .status(409)
+        .json({ error: 'CONFLICT', message: 'Time slot is not available' })
+    }
+    const roomName = crypto.randomUUID()
+    const meetingUrl = `https://meet.jit.si/${roomName}`
 
-const newSession = await db.transaction(async (tx) => {
-return tx
-.insert(sessions)
-.values({
-mentorId,
-menteeId: menteeProfile.id,
-scheduledAt: scheduledAtISO,
-durationMins,
-status: 'pending',
-meetingUrl,
-topic: topic ?? null,
-menteeNote: notes ?? null,
-})
-.returning()
-.get()
-})
+    const newSession = await db.transaction(async tx => {
+      return tx
+        .insert(sessions)
+        .values({
+          mentorId,
+          menteeId: menteeProfile.id,
+          scheduledAt: scheduledAtISO,
+          durationMins,
+          status: 'pending',
+          meetingUrl,
+          topic: topic ?? null,
+          menteeNote: notes ?? null,
+        })
+        .returning()
+        .get()
+    })
 
-return res.status(201).json(newSession)
-} catch (error) {
-logger.error(`Error when booking session ${error}`)
-return res.status(500).json({ error: 'Internal Server Error' })
+    return res.status(201).json(newSession)
+  } catch (error) {
+    logger.error(`Error when booking session ${error}`)
+    return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
 
@@ -356,9 +359,9 @@ router.get('/', requireAuth, async (req, res) => {
       data,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     })
-} catch (error) {
-logger.error(`Error fetching user sessions ${error}`)
-return res.status(500).json({ error: 'Internal Server Error' })
+  } catch (error) {
+    logger.error(`Error fetching user sessions ${error}`)
+    return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
 
@@ -485,9 +488,9 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
       .get()
 
     return res.json(updated)
-} catch (error) {
-logger.error(`Error when confirming meeting/session ${error}`)
-return res.status(500).json({ error: 'Internal Server Error' })
+  } catch (error) {
+    logger.error(`Error when confirming meeting/session ${error}`)
+    return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
 
@@ -538,12 +541,13 @@ router.patch('/:sessionId/cancel', requireRole('mentor'), async (req, res) => {
         .status(404)
         .json({ error: 'NOT_FOUND', message: 'Session Not Found' })
 
-const { mentor, mentee } = await getProfilesForUser(userId)
+    const { mentor, mentee } = await getProfilesForUser(userId)
 
-if (!mentor || mentor.id !== session.mentorId)
-return res
-.status(403)
-.json({ error: 'FORBIDDEN', message: 'Not authorized to cancel this session' })
+    if (!mentor || mentor.id !== session.mentorId)
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Not authorized to cancel this session',
+      })
 
     if (session.status === 'cancelled' || session.status === 'completed') {
       return res.status(409).json({
@@ -565,9 +569,9 @@ return res
       .get()
 
     return res.json(updated)
-} catch (error) {
-logger.error(`Error cancelling session ${error}`)
-return res.status(500).json({ error: 'Internal Server Error' })
+  } catch (error) {
+    logger.error(`Error cancelling session ${error}`)
+    return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
 
@@ -648,9 +652,9 @@ router.patch('/:sessionId/complete', requireAuth, async (req, res) => {
     ])
 
     return res.json(updated)
-} catch (error) {
-logger.error(`Error when completing session ${error}`)
-return res.status(500).json({ error: 'Internal Server Error' })
+  } catch (error) {
+    logger.error(`Error when completing session ${error}`)
+    return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
 
