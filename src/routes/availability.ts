@@ -86,7 +86,12 @@ router.get(
   validate(getMentorAvailabilitySchema),
   async (req, res) => {
     try {
-      const { mentorId } = req.params
+      const { mentorId } = req.params as { mentorId: string }
+
+      // Try cache first
+      const cacheKey = CacheKeys.mentorAvailabilitySlots(mentorId)
+      const cached = cache.get(cacheKey)
+      if (cached) return res.json(cached)
 
       const mentor = await db
         .select()
@@ -109,6 +114,8 @@ router.get(
           ),
         )
         .all()
+
+      cache.set(cacheKey, slots, CacheTTL.MENTOR_AVAILABILITY_SLOTS)
 
       return res.json(slots)
     } catch (err) {
@@ -186,7 +193,7 @@ router.put(
           .json({ error: 'FORBIDDEN', message: 'Mentor profile not found' })
       }
 
-      const { slots } = req.body
+      const { slots }: { slots: Array<{ dayOfWeek: number; startTime: string; endTime: string }> } = req.body
 
       await db.transaction(tx => {
         tx.delete(availabilitySlots)
@@ -207,6 +214,7 @@ router.put(
       })
       // Bust all cached availability for this mentor (all weeks)
       cache.deletePattern(`mentor:availability:${mentorProfile.id}`)
+      cache.delete(CacheKeys.mentorAvailabilitySlots(mentorProfile.id))
 
       const updated = await db
         .select()
@@ -260,7 +268,7 @@ router.get(
   validate(getOpenSlotsSchema),
   async (req, res) => {
     try {
-      const { mentorId } = req.params
+      const { mentorId } = req.params as { mentorId: string }
       const { weekStart } = req.query as { weekStart: string }
 
       const cacheKey = CacheKeys.mentorAvailability(mentorId, weekStart)

@@ -265,10 +265,11 @@
           "type": {
             "type": "string",
             "enum": [
-              "session_reminder",
+              "session_booked",
               "session_confirmed",
               "session_cancelled",
               "session_completed",
+              "session_reminder",
               "review_received",
               "verification_approved",
               "verification_rejected"
@@ -277,10 +278,10 @@
           "title": {
             "type": "string"
           },
-          "message": {
+          "body": {
             "type": "string"
           },
-          "read": {
+          "isRead": {
             "type": "boolean"
           },
           "data": {
