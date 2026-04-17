@@ -5,15 +5,25 @@ export const updateMentorProfileSchema = z.object({
     fullName: z.string().min(1).optional(),
     headline: z.string().min(1).optional(),
     bio: z.string().min(10).optional(),
-    expertise: z.array(z.string()).min(1).optional(),
+    expertiseTags: z.array(z.string()).min(1).optional(),
     yearsExp: z.number().int().min(0).optional(),
-    hourlyRate: z.number().int().min(0).optional(),
-    company: z.string().optional(),
-    title: z.string().optional(),
+    sessionPrice: z.number().int().min(0).optional(),
     avatarUrl: z.string().url().optional(),
     linkedinUrl: z.string().url().optional(),
     location: z.string().optional(),
     languages: z.array(z.string()).optional(),
+  }),
+})
+
+export const mentorDocumentsSchema = z.object({
+  body: z.object({
+    documents: z.array(z.string().url()).default([]),
+  }),
+})
+
+export const removeMentorDocumentSchema = z.object({
+  body: z.object({
+    document: z.string().url(),
   }),
 })
 

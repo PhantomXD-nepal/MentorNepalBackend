@@ -3,10 +3,10 @@ import {
   createReviewSchema,
   getMentorReviewsSchema,
 } from '../validation/reviews'
-import { requireAuth, requireRole, validate } from '../middleware'
+import { requireAuth, validate } from '../middleware'
 import { db } from '../db'
 import { menteeProfiles, mentorProfiles, reviews, sessions } from '../schema'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { logger } from '../logger'
 import { cache, CacheKeys, CacheTTL } from '../cache'
 
@@ -141,54 +141,72 @@ router.post(
           .json({ error: 'FORBIDDEN', message: 'Session is not completed yet' })
       }
 
-      const existing = await db
-        .select()
-        .from(reviews)
-        .where(eq(reviews.sessionId, sessionId))
-        .get()
+      const newReview = await db.transaction(async tx => {
+        const existing = await tx
+          .select()
+          .from(reviews)
+          .where(eq(reviews.sessionId, sessionId))
+          .get()
 
-      if (existing) {
+        if (existing) {
+          throw new Error('ALREADY_REVIEWED')
+        }
+
+        const review = await tx
+          .insert(reviews)
+          .values({
+            sessionId,
+            mentorId: session.mentorId,
+            menteeId: menteeProfile.id,
+            rating,
+            comment: content ?? null,
+          })
+          .returning()
+          .get()
+
+        await tx
+          .update(mentorProfiles)
+          .set({
+            reviewCount: sql`${mentorProfiles.reviewCount} + 1`,
+            avgRating: sql`
+            ROUND(
+              (${mentorProfiles.avgRating} * ${mentorProfiles.reviewCount} + ${rating})
+              / (${mentorProfiles.reviewCount} + 1),
+              2
+            )
+          `,
+          })
+          .where(eq(mentorProfiles.id, session.mentorId))
+
+        return review
+      })
+
+      if (!newReview) {
         return res.status(409).json({
           error: 'ALREADY_REVIEWED',
           message: 'Session has already been reviewed',
         })
       }
 
-      const newReview = await db
-        .insert(reviews)
-        .values({
-          sessionId,
-          mentorId: session.mentorId,
-          menteeId: menteeProfile.id,
-          rating,
-          comment: content ?? null,
-        })
-        .returning()
-        .get()
-
-      await db
-        .update(mentorProfiles)
-        .set({
-          reviewCount: sql`${mentorProfiles.reviewCount} + 1`,
-          avgRating: sql`
-          ROUND(
-            (${mentorProfiles.avgRating} * ${mentorProfiles.reviewCount} + ${rating})
-            / (${mentorProfiles.reviewCount} + 1),
-            2
-          )
-        `,
-        })
-        .where(eq(mentorProfiles.id, session.mentorId))
-
       // Invalidate all cached review pages and the mentor profile for this mentor
       // since avgRating and reviewCount have changed
-      cache.deletePattern(
-        CacheKeys.mentorReviews(session.mentorId, 0).replace(':0', ''),
-      )
+      cache.deletePattern(`mentor:reviews:${session.mentorId}`)
       cache.delete(CacheKeys.mentorProfile(session.mentorId))
 
-      return res.status(201).json(newReview)
+      return res.status(201).json({
+        ...newReview,
+        content: newReview.comment,
+        comment: undefined,
+      })
     } catch (err) {
+      if (err instanceof Error && err.message === 'ALREADY_REVIEWED') {
+        return res.status(409).json({
+          error: 'ALREADY_REVIEWED',
+          message: 'Session has already been reviewed',
+        })
+      }
+
+      logger.error({ err }, 'Failed to submit review')
       return res
         .status(500)
         .json({ error: 'INTERNAL_ERROR', message: 'Failed to submit review' })
@@ -244,14 +262,14 @@ router.post(
  */
 router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
   try {
-    const { mentorId } = req.params
+    const { mentorId } = req.params as { mentorId: string }
     const { page, limit } = req.query as unknown as {
       page: number
       limit: number
     }
     const offset = (page - 1) * limit
 
-    const cacheKey = CacheKeys.mentorReviews(mentorId, page)
+    const cacheKey = CacheKeys.mentorReviews(mentorId, page, limit)
     const cached = cache.get(cacheKey)
     if (cached) return res.json(cached)
 
@@ -273,7 +291,14 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
     )
 
     const [data, countResult] = await Promise.all([
-      db.select().from(reviews).where(where).limit(limit).offset(offset).all(),
+      db
+        .select()
+        .from(reviews)
+        .where(where)
+        .orderBy(desc(reviews.createdAt))
+        .limit(limit)
+        .offset(offset)
+        .all(),
       db
         .select({ count: sql<number>`count(*)` })
         .from(reviews)
@@ -284,7 +309,11 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
     const total = countResult?.count ?? 0
 
     const payload = {
-      data,
+      data: data.map(review => ({
+        ...review,
+        content: review.comment,
+        comment: undefined,
+      })),
       stats: {
         average: mentor.avgRating,
         total: mentor.reviewCount,
@@ -301,6 +330,7 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
 
     return res.json(payload)
   } catch (err) {
+    logger.error({ err }, 'Failed to fetch reviews')
     return res
       .status(500)
       .json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch reviews' })

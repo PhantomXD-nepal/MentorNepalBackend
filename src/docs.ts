@@ -27,3 +27,7 @@ const options = {
 }
 
 export const swaggerSpec = swaggerJsdoc(options)
+
+import fs from 'fs'
+
+fs.writeFileSync('./swagger.json', JSON.stringify(swaggerSpec, null, 2))

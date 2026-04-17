@@ -206,8 +206,8 @@ export const CacheKeys = {
   mentorProfile: (mentorId: string): string =>
     `mentor:profile:${mentorId}`,
 
-  mentorReviews: (mentorId: string, page: number): string =>
-    `mentor:reviews:${mentorId}:${page}`,
+  mentorReviews: (mentorId: string, page: number, limit: number): string =>
+    `mentor:reviews:${mentorId}:${page}:${limit}`,
 
   mentorAvailability: (mentorId: string, weekStart: string): string =>
     `mentor:availability:${mentorId}:${weekStart}`,

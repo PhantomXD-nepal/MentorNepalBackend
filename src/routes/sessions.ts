@@ -4,7 +4,7 @@ import { requireAuth, requireRole, validate } from '../middleware'
 import { logger } from '../logger'
 import { db } from '../db'
 import { menteeProfiles, mentorProfiles, sessions } from '../schema'
-import { and, eq, or, sql } from 'drizzle-orm'
+import { and, eq, inArray, or, sql } from 'drizzle-orm'
 import { getMentorDetailsById, getMentorDetailsByUserId } from '../lib/mentors'
 import { assertParticipant, getProfilesForUser } from '../lib/session'
 import {
@@ -111,6 +111,10 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
   try {
     const userId = req.user?.id
 
+    if (!userId) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' })
+    }
+
     const { mentorId, startTime, endTime, topic, notes } = req.body
 
     const start = new Date(startTime)
@@ -125,7 +129,7 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
 
     const durationMins = Math.round((end.getTime() - start.getTime()) / 60000)
 
-    const menteeProfile = db
+    const menteeProfile = await db
       .select()
       .from(menteeProfiles)
       .where(eq(menteeProfiles.userId, userId))
@@ -239,18 +243,18 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
  *       401:
  *         description: Not authenticated
  */
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', requireAuth, validate(getSessionsQuerySchema), async (req, res) => {
   try {
     const userId = req.user?.id
 
     if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const { status, role } = req.query
-    const page = Math.max(1, parseInt(req.query.page as string) || 1)
-    const limit = Math.min(
-      100,
-      Math.max(1, parseInt(req.query.limit as string) || 20),
-    )
+    const { status, role, page, limit } = req.query as unknown as {
+      status?: 'pending' | 'confirmed' | 'cancelled' | 'completed'
+      role?: 'mentor' | 'mentee'
+      page: number
+      limit: number
+    }
     const offset = (page - 1) * limit
 
     const { mentor, mentee } = await getProfilesForUser(userId)
@@ -273,16 +277,16 @@ router.get('/', requireAuth, async (req, res) => {
     }
 
     const statusFilter = status
-      ? eq(sessions.status, status as string)
+      ? eq(sessions.status, status)
       : undefined
-    const where = statusFilter ? and(roleFilter, statusFilter) : roleFilter
+    const whereClause = statusFilter ? and(roleFilter, statusFilter) : roleFilter
 
     const [data, countResult] = await Promise.all([
-      db.select().from(sessions).where(where).limit(limit).offset(offset).all(),
+      db.select().from(sessions).where(whereClause).limit(limit).offset(offset).all(),
       db
         .select({ count: sql<number>`count(*)` })
         .from(sessions)
-        .where(where)
+        .where(whereClause)
         .get(),
     ])
 
@@ -326,15 +330,17 @@ router.get('/', requireAuth, async (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.get('/:sessionId', requireAuth, async (req, res) => {
+router.get('/:sessionId', requireAuth, validate(sessionIdParamSchema), async (req, res) => {
   try {
     const userId = req.user?.id
     if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
+    const { sessionId } = req.params as { sessionId: string }
+
     const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     if (!session)
@@ -384,46 +390,53 @@ router.get('/:sessionId', requireAuth, async (req, res) => {
  *       409:
  *         description: Session already confirmed/cancelled
  */
-router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
-  try {
-    const userId = req.user?.id
-    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+router.patch(
+  '/:sessionId/confirm',
+  requireRole('mentor'),
+  validate(sessionIdParamSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const session = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
-      .get()
+      const { sessionId } = req.params as { sessionId: string }
 
-    const mentorProfile = await getMentorDetailsByUserId(userId)
+      const session = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .get()
 
-    if (!session)
-      return res
-        .status(404)
-        .json({ error: 'NOT_FOUND', message: 'Session not found' })
-    if (session.mentorId !== mentorProfile?.id)
-      return res
-        .status(403)
-        .json({ error: 'FORBIDDEN', message: 'Not your session' })
-    if (session.status !== 'pending') {
-      return res.status(409).json({
-        error: 'CONFLICT',
-        message: `Session is already ${session.status}`,
-      })
+      const mentorProfile = await getMentorDetailsByUserId(userId)
+
+      if (!session)
+        return res
+          .status(404)
+          .json({ error: 'NOT_FOUND', message: 'Session not found' })
+      if (!mentorProfile || session.mentorId !== (mentorProfile as { id: string }).id)
+        return res
+          .status(403)
+          .json({ error: 'FORBIDDEN', message: 'Not your session' })
+      if (session.status !== 'pending') {
+        return res.status(409).json({
+          error: 'CONFLICT',
+          message: `Session is already ${session.status}`,
+        })
+      }
+      const updated = await db
+        .update(sessions)
+        .set({ status: 'confirmed', updatedAt: sql`(datetime('now'))` })
+        .where(eq(sessions.id, session.id))
+        .returning()
+        .get()
+
+      return res.json(updated)
+    } catch (error) {
+      logger.error(`Error when confirming meeting/session ${error}`)
+      return res.status(500).json({ error: 'Internal Server Error' })
     }
-    const updated = await db
-      .update(sessions)
-      .set({ status: 'confirmed', updatedAt: sql`(datetime('now'))` })
-      .where(eq(sessions.id, session.id))
-      .returning()
-      .get()
-
-    return res.json(updated)
-  } catch (error) {
-    logger.error(`Error when confirming meeting/session ${error}`)
-    return res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+  },
+)
 
 /**
  * @swagger
@@ -457,14 +470,20 @@ router.patch('/:sessionId/confirm', requireRole('mentor'), async (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.patch('/:sessionId/cancel', requireAuth, async (req, res) => {
+router.patch('/:sessionId/cancel', requireAuth, validate(cancelSessionSchema), async (req, res) => {
   try {
     const userId = req.user?.id
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const session = db
+    const sessionId = req.params.sessionId
+    if (Array.isArray(sessionId)) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
+    }
+
+    const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     if (!session)
@@ -530,64 +549,71 @@ router.patch('/:sessionId/cancel', requireAuth, async (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.patch('/:sessionId/complete', requireAuth, async (req, res) => {
-  try {
-    const userId = req.user?.id
-    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+router.patch(
+  '/:sessionId/complete',
+  requireAuth,
+  validate(sessionIdParamSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const mentorProfile = await db
-      .select()
-      .from(mentorProfiles)
-      .where(eq(mentorProfiles.userId, userId))
-      .get()
+      const mentorProfile = await db
+        .select()
+        .from(mentorProfiles)
+        .where(eq(mentorProfiles.userId, userId))
+        .get()
 
-    if (!mentorProfile)
-      return res.status(403).json({
-        error: 'FORBIDDEN',
-        message: 'Only mentors can complete sessions',
-      })
+      if (!mentorProfile)
+        return res.status(403).json({
+          error: 'FORBIDDEN',
+          message: 'Only mentors can complete sessions',
+        })
 
-    const session = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
-      .get()
+      const { sessionId } = req.params as { sessionId: string }
 
-    if (!session)
-      return res
-        .status(404)
-        .json({ error: 'NOT_FOUND', message: 'Session not found' })
-    if (session.mentorId !== mentorProfile.id)
-      return res
-        .status(403)
-        .json({ error: 'FORBIDDEN', message: 'Not your session' })
+      const session = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .get()
 
-    if (session.status !== 'confirmed') {
-      return res.status(409).json({
-        error: 'CONFLICT',
-        message: 'Only confirmed sessions can be completed',
-      })
+      if (!session)
+        return res
+          .status(404)
+          .json({ error: 'NOT_FOUND', message: 'Session not found' })
+      if (session.mentorId !== mentorProfile.id)
+        return res
+          .status(403)
+          .json({ error: 'FORBIDDEN', message: 'Not your session' })
+
+      if (session.status !== 'confirmed') {
+        return res.status(409).json({
+          error: 'CONFLICT',
+          message: 'Only confirmed sessions can be completed',
+        })
+      }
+
+      const [updated] = await Promise.all([
+        db
+          .update(sessions)
+          .set({ status: 'completed', updatedAt: sql`(datetime('now'))` })
+          .where(eq(sessions.id, session.id))
+          .returning()
+          .get(),
+        db
+          .update(mentorProfiles)
+          .set({ totalSessions: sql`${mentorProfiles.totalSessions} + 1` })
+          .where(eq(mentorProfiles.id, mentorProfile.id)),
+      ])
+
+      return res.json(updated)
+    } catch (error) {
+      logger.error(`Error when completing session ${error}`)
+      return res.status(500).json({ error: 'Internal Server Error' })
     }
-
-    const [updated] = await Promise.all([
-      db
-        .update(sessions)
-        .set({ status: 'completed', updatedAt: sql`(datetime('now'))` })
-        .where(eq(sessions.id, session.id))
-        .returning()
-        .get(),
-      db
-        .update(mentorProfiles)
-        .set({ totalSessions: sql`${mentorProfiles.totalSessions} + 1` })
-        .where(eq(mentorProfiles.id, mentorProfile.id)),
-    ])
-
-    return res.json(updated)
-  } catch (error) {
-    logger.error(`Error when completing session ${error}`)
-    return res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+  },
+)
 
 /**
  * @swagger
@@ -622,15 +648,17 @@ router.patch('/:sessionId/complete', requireAuth, async (req, res) => {
  *       404:
  *         description: Session not found
  */
-router.get('/:sessionId/join', requireAuth, async (req, res) => {
+router.get('/:sessionId/join', requireAuth, validate(sessionIdParamSchema), async (req, res) => {
   try {
     const userId = req.user?.id
     if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
+    const { sessionId } = req.params as { sessionId: string }
+
     const session = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, req.params.sessionId))
+      .where(eq(sessions.id, sessionId))
       .get()
 
     if (!session)

@@ -9,7 +9,7 @@ export const roleSchema = z.object({
 export const mentorProfileSchema = z.object({
   body: z.object({
     fullName: z.string().min(1),
-    headline: z.string().min(1),
+    headline: z.string().min(1).optional(),
     bio: z.string().min(10),
     expertise: z.array(z.string()).min(1),
     yearsExp: z.number().int().min(0),
