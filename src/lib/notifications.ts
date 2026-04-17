@@ -41,6 +41,7 @@ export async function createNotification(params: {
 
   // Invalidate notification caches for this user
   cache.deletePattern(`notifications:${userId}`)
+  cache.delete(CacheKeys.notificationUnreadCount(userId))
 
   return notification
 }
@@ -160,6 +161,7 @@ export async function markNotificationRead(
 
   // Invalidate notification caches
   cache.deletePattern(`notifications:${userId}`)
+  cache.delete(CacheKeys.notificationUnreadCount(userId))
 
   return { ...notification, isRead: true }
 }
@@ -180,6 +182,7 @@ export async function markAllNotificationsRead(userId: string) {
 
   // Invalidate notification caches
   cache.deletePattern(`notifications:${userId}`)
+  cache.delete(CacheKeys.notificationUnreadCount(userId))
 
   return { success: true }
 }
