@@ -164,7 +164,7 @@ router.get(
       // Try cache first
       const cacheKey = CacheKeys.adminVerification(status, page, limit)
       const cached = cache.get(cacheKey)
-      if (cached) return res.json(cached)
+      if (cached) { res.locals.cached = true; return res.json(cached) }
 
       const where = eq(verificationRequests.status, status)
 
@@ -410,7 +410,7 @@ router.get('/users', validate(getUsersSchema), async (req, res) => {
     // Try cache first
     const cacheKey = CacheKeys.adminUsers(page, limit, role, search)
     const cached = cache.get(cacheKey)
-    if (cached) return res.json(cached)
+    if (cached) { res.locals.cached = true; return res.json(cached) }
 
     const conditions = []
     if (role) conditions.push(eq(user.role, role))
@@ -481,7 +481,7 @@ router.get('/stats', async (req, res) => {
   try {
     const cacheKey = CacheKeys.platformStats()
     const cached = cache.get(cacheKey)
-    if (cached) return res.json(cached)
+    if (cached) { res.locals.cached = true; return res.json(cached) }
 
     const [
       totalUsers,

@@ -28,7 +28,7 @@ export async function fetchMentors(filters: MentorFilters) {
   })
   const cacheKey = CacheKeys.mentorsList(page, filterString)
   const cached = cache.get(cacheKey)
-  if (cached) return cached
+  if (cached) return { ...cached, _cached: true as const }
 
   const conditions = [sql`${mentorProfiles.isActive} = 1`]
 
@@ -94,9 +94,6 @@ export async function fetchMentors(filters: MentorFilters) {
   ])
 
   const total = countResult?.count ?? 0
-  console.log(filters)
-
-  console.log(data)
 
   const payload = {
     data: data.map(m => ({
@@ -120,7 +117,7 @@ export async function getMentorDetailsById(mentorId: string) {
   const key = `mentor:details:${mentorId}`
 
   const cached = await cache.get(key)
-  if (cached) return cached
+  if (cached) return { ...(cached as Record<string, any>), _cached: true as const }
 
   const data = await db
     .select({
@@ -170,7 +167,7 @@ export async function getMentorDetailsByUserId(userId: string) {
   const key = `mentor:details:user:${userId}`
 
   const cached = await cache.get(key)
-  if (cached) return cached
+  if (cached) return { ...(cached as Record<string, any>), _cached: true as const }
 
   const data = await db
     .select({

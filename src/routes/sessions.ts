@@ -280,7 +280,7 @@ router.get('/', requireAuth, validate(getSessionsQuerySchema), async (req, res) 
     // Try cache first
     const cacheKey = CacheKeys.userSessions(userId, page, limit, status, role)
     const cached = cache.get(cacheKey)
-    if (cached) return res.json(cached)
+    if (cached) { res.locals.cached = true; return res.json(cached) }
     const offset = (page - 1) * limit
 
     const { mentor, mentee } = await getProfilesForUser(userId)
@@ -378,6 +378,7 @@ router.get('/:sessionId', requireAuth, validate(sessionIdParamSchema), async (re
         return res
           .status(403)
           .json({ error: 'FORBIDDEN', message: 'Not authorized' })
+      res.locals.cached = true
       return res.json(cached)
     }
 

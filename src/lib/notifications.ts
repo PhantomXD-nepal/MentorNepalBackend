@@ -48,6 +48,7 @@ export async function createNotification(params: {
 
 /**
  * Get a user's notifications with pagination, cached.
+ * Returns the payload with an extra `_cached` flag for the route to consume.
  */
 export async function getUserNotifications(
   userId: string,
@@ -57,7 +58,7 @@ export async function getUserNotifications(
 ) {
   const cacheKey = CacheKeys.notifications(userId, page, limit)
   const cached = cache.get(cacheKey)
-  if (cached) return cached
+  if (cached) return { ...cached, _cached: true as const }
 
   const conditions = [eq(notifications.userId, userId)]
   if (unreadOnly) {

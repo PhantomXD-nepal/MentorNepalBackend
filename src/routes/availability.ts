@@ -91,7 +91,7 @@ router.get(
       // Try cache first
       const cacheKey = CacheKeys.mentorAvailabilitySlots(mentorId)
       const cached = cache.get(cacheKey)
-      if (cached) return res.json(cached)
+      if (cached) { res.locals.cached = true; return res.json(cached) }
 
       const mentor = await db
         .select()
@@ -273,7 +273,7 @@ router.get(
 
       const cacheKey = CacheKeys.mentorAvailability(mentorId, weekStart)
       const cached = cache.get(cacheKey)
-      if (cached) return res.json(cached)
+      if (cached) { res.locals.cached = true; return res.json(cached) }
 
       const mentor = await db
         .select()

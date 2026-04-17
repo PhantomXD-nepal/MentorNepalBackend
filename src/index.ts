@@ -8,6 +8,7 @@ import { logger } from './logger'
 import { apiReference } from '@scalar/express-api-reference'
 import { swaggerSpec } from './docs'
 import { auth } from './auth'
+import { requestLogger } from './middleware'
 
 // Import db to ensure initialization
 import { db } from './db'
@@ -39,10 +40,7 @@ app.all('/api/auth/{*any}', toNodeHandler(auth))
 
 // Now mount express.json() for other routes
 app.use(express.json())
-app.use((req, res, next) => {
-  logger.info(`Req hit at ${req.url}`)
-  next()
-})
+app.use(requestLogger)
 app.use(
   helmet({
     contentSecurityPolicy: {

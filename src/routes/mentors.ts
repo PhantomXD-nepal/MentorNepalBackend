@@ -171,7 +171,10 @@ router.get(
   async (req, res) => {
     try {
       const filters = req.query as unknown as MentorFilters
-      res.json(await fetchMentors(filters))
+      const result = await fetchMentors(filters) as Record<string, any> & { _cached?: boolean }
+      if (result._cached) res.locals.cached = true
+      const { _cached, ...payload } = result
+      res.json(payload)
     } catch (error) {
       logger.error(`Error during fetching mentors ${error}`)
     }
@@ -515,7 +518,14 @@ router.delete(
  */
 router.get('/:mentorId', async (req, res) => {
   try {
-    res.json(await getMentorDetailsById(req.params.mentorId))
+    const result = await getMentorDetailsById(req.params.mentorId) as Record<string, any> & { _cached?: boolean } | null
+    if (result && result._cached) res.locals.cached = true
+    if (result) {
+      const { _cached, ...payload } = result
+      res.json(payload)
+    } else {
+      res.json(null)
+    }
   } catch (error) {
     logger.error(`Error when getting a mentor from id ${error}`)
   }

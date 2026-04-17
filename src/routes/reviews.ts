@@ -289,7 +289,7 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
 
     const cacheKey = CacheKeys.mentorReviews(mentorId, page, limit)
     const cached = cache.get(cacheKey)
-    if (cached) return res.json(cached)
+    if (cached) { res.locals.cached = true; return res.json(cached) }
 
     const mentor = await db
       .select()

@@ -107,8 +107,10 @@ router.get(
         limit: number
       }
 
-      const result = await getUserNotifications(userId, page, limit, unreadOnly)
-      return res.json(result)
+      const result = await getUserNotifications(userId, page, limit, unreadOnly) as Record<string, any> & { _cached?: boolean }
+      if (result._cached) res.locals.cached = true
+      const { _cached, ...payload } = result
+      return res.json(payload)
     } catch (error) {
       logger.error({ error }, 'Error fetching notifications')
       return res.status(500).json({
