@@ -265,6 +265,7 @@ router.post(
   requireRole('mentor'),
   validate(mentorProfileSchema),
   async (req, res) => {
+    logger.info('REQ')
     try {
       const data = req.body
 
@@ -280,46 +281,50 @@ router.post(
       )
 
       await db.transaction(tx => {
-        // Update the mentor profile and get back its id
-        const updatedMentor = tx
-          .update(mentorProfiles)
-          .set({
-            fullName: data.fullName,
-            headline: data.headline,
-            bio: data.bio,
-            expertiseTags: JSON.stringify(data.expertise),
-            yearsExp: data.yearsExp,
-            sessionPrice: data.hourlyRate,
-            avatarUrl: data.avatarUrl ?? null,
-            linkedinUrl: data.linkedinUrl ?? null,
-            location: data.location ?? null,
-            languages: data.languages ? JSON.stringify(data.languages) : null,
-            updatedAt: sql`(datetime('now'))`,
+        const profileData = {
+          fullName: data.fullName,
+          headline: data.headline,
+          bio: data.bio,
+          expertiseTags: JSON.stringify(data.expertise),
+          yearsExp: data.yearsExp,
+          sessionPrice: data.hourlyRate,
+          avatarUrl: data.avatarUrl ?? null,
+          linkedinUrl: data.linkedinUrl ?? null,
+          location: data.location ?? null,
+          languages: data.languages ? JSON.stringify(data.languages) : null,
+          updatedAt: sql`(datetime('now'))`,
+        }
+
+        // Upsert the mentor profile
+        const upsertedMentor = tx
+          .insert(mentorProfiles)
+          .values({ userId: req.user!.id, ...profileData })
+          .onConflictDoUpdate({
+            target: mentorProfiles.userId,
+            set: profileData,
           })
-          .where(eq(mentorProfiles.userId, req.user!.id))
           .returning()
           .get()
 
-        if (!updatedMentor) {
-          throw new Error('Mentor profile not found')
+        if (!upsertedMentor) {
+          throw new Error('Failed to upsert mentor profile')
         }
 
         // Only create a verification request if one doesn't already exist
         const existingRequest = tx
           .select()
           .from(verificationRequests)
-          .where(eq(verificationRequests.mentorId, updatedMentor.id))
+          .where(eq(verificationRequests.mentorId, upsertedMentor.id))
           .get()
 
         if (!existingRequest) {
           tx.insert(verificationRequests).values({
-            mentorId: updatedMentor.id,
+            mentorId: upsertedMentor.id,
             linkedinUrl: data.linkedinUrl ?? '',
             status: 'pending',
           })
         }
       })
-
       res.json({ message: 'Mentor profile created' })
     } catch (error) {
       logger.error(`Error creating mentor profile: ${error}`)

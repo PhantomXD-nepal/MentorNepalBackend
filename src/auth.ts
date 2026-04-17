@@ -12,4 +12,19 @@ export const auth = betterAuth({
     requireEmailVerification: false,
     enabled: true,
   },
+  trustedOrigins: ['http://localhost:8080'],
+  user: {
+    additionalFields: {
+      role: {
+        type: 'string',
+        required: false,
+        defaultValue: 'mentee',
+      },
+      onboardingComplete: {
+        type: 'boolean',
+        required: false,
+        defaultValue: false,
+      },
+    },
+  },
 })

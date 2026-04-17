@@ -1,15 +1,27 @@
 import { Router } from 'express'
 import { requireAuth, requireRole, validate } from '../middleware'
-import { updateMentorProfileSchema } from '../validation'
+import {
+  getMentorsQuerySchema,
+  mentorDocumentsSchema,
+  mentorIdParamSchema,
+  removeMentorDocumentSchema,
+  updateMentorProfileSchema,
+} from '../validation'
 import { db } from '../db'
 import { logger } from '../logger'
 import { and, eq, gte, like, lte, sql } from 'drizzle-orm'
 import { mentorProfiles } from '../schema'
 import {
+  addMentorDocumentsByUserId,
   fetchMentors,
   getMentorDetailsById,
+  getMentorDocumentsById,
   getMentorDetailsByUserId,
+  removeMentorDocumentByUserId,
+  replaceMentorDocumentsByUserId,
+  MentorFilters,
 } from '../lib/mentors'
+import { cache } from '../cache'
 
 const router = Router()
 
@@ -31,6 +43,11 @@ const router = Router()
  *           type: string
  *         userId:
  *           type: string
+ *         documents:
+ *           type: array
+ *           items:
+ *             type: string
+ *             format: uri
  *         expertise:
  *           type: array
  *           items:
@@ -75,6 +92,14 @@ const router = Router()
  *           type: number
  *         reviewCount:
  *           type: integer
+ *     MentorDocuments:
+ *       type: object
+ *       properties:
+ *         documents:
+ *           type: array
+ *           items:
+ *             type: string
+ *             format: uri
  */
 
 /**
@@ -139,13 +164,19 @@ const router = Router()
  *                     totalPages:
  *                       type: integer
  */
-router.get('/', requireAuth, async (req, res) => {
-  try {
-    res.json(await fetchMentors())
-  } catch (error) {
-    logger.error(`Error during fetching mentors ${error}`)
-  }
-})
+router.get(
+  '/',
+  requireAuth,
+  validate(getMentorsQuerySchema),
+  async (req, res) => {
+    try {
+      const filters = req.query as unknown as MentorFilters
+      res.json(await fetchMentors(filters))
+    } catch (error) {
+      logger.error(`Error during fetching mentors ${error}`)
+    }
+  },
+)
 
 /**
  * @swagger
@@ -195,6 +226,270 @@ router.get('/me', requireRole('mentor'), async (req, res) => {
     })
   }
 })
+
+/**
+ * @swagger
+ * /api/mentors/{mentorId}/documents:
+ *   get:
+ *     summary: Get a mentor's verification documents
+ *     tags: [Mentors]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: mentorId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Mentor documents
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/MentorDocuments'
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Not authorized
+ *       404:
+ *         description: Mentor not found
+ */
+router.get(
+  '/:mentorId/documents',
+  requireAuth,
+  validate(mentorIdParamSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      const role = req.user?.role
+      const { mentorId } = req.params as { mentorId: string }
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'Missing user in request context',
+        })
+      }
+
+      const mentorDocuments = await getMentorDocumentsById(mentorId)
+
+      if (!mentorDocuments) {
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Mentor profile not found',
+        })
+      }
+
+      if (role !== 'admin' && mentorDocuments.userId !== userId) {
+        return res.status(403).json({
+          error: 'FORBIDDEN',
+          message: 'Not authorized to view mentor documents',
+        })
+      }
+
+      return res.json({ documents: mentorDocuments.documents })
+    } catch (error) {
+      logger.error({ error }, 'Error fetching mentor documents')
+      return res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to fetch mentor documents',
+      })
+    }
+  },
+)
+
+/**
+ * @swagger
+ * /api/mentors/me/documents:
+ *   post:
+ *     summary: Append verification documents for the current mentor
+ *     tags: [Mentors]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/MentorDocuments'
+ *     responses:
+ *       200:
+ *         description: Updated mentor documents
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: User is not a mentor
+ *       404:
+ *         description: Mentor profile not found
+ */
+router.post(
+  '/me/documents',
+  requireRole('mentor'),
+  validate(mentorDocumentsSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'Missing user context',
+        })
+      }
+
+      const documents = await addMentorDocumentsByUserId(
+        userId,
+        req.body.documents,
+      )
+
+      if (!documents) {
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Mentor profile not found',
+        })
+      }
+
+      return res.json({ documents })
+    } catch (error) {
+      logger.error({ error }, 'Error appending mentor documents')
+      return res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to append mentor documents',
+      })
+    }
+  },
+)
+
+/**
+ * @swagger
+ * /api/mentors/me/documents:
+ *   patch:
+ *     summary: Replace verification documents for the current mentor
+ *     tags: [Mentors]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/MentorDocuments'
+ *     responses:
+ *       200:
+ *         description: Updated mentor documents
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: User is not a mentor
+ *       404:
+ *         description: Mentor profile not found
+ */
+router.patch(
+  '/me/documents',
+  requireRole('mentor'),
+  validate(mentorDocumentsSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'Missing user context',
+        })
+      }
+
+      const documents = await replaceMentorDocumentsByUserId(
+        userId,
+        req.body.documents,
+      )
+
+      if (!documents) {
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Mentor profile not found',
+        })
+      }
+
+      return res.json({ documents })
+    } catch (error) {
+      logger.error({ error }, 'Error replacing mentor documents')
+      return res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to replace mentor documents',
+      })
+    }
+  },
+)
+
+/**
+ * @swagger
+ * /api/mentors/me/documents:
+ *   delete:
+ *     summary: Remove a single verification document for the current mentor
+ *     tags: [Mentors]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - document
+ *             properties:
+ *               document:
+ *                 type: string
+ *                 format: uri
+ *     responses:
+ *       200:
+ *         description: Updated mentor documents
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: User is not a mentor
+ *       404:
+ *         description: Mentor profile not found
+ */
+router.delete(
+  '/me/documents',
+  requireRole('mentor'),
+  validate(removeMentorDocumentSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'Missing user context',
+        })
+      }
+
+      const documents = await removeMentorDocumentByUserId(
+        userId,
+        req.body.document,
+      )
+
+      if (!documents) {
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Mentor profile not found',
+        })
+      }
+
+      return res.json({ documents })
+    } catch (error) {
+      logger.error({ error }, 'Error removing mentor document')
+      return res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to remove mentor document',
+      })
+    }
+  },
+)
 
 /**
  * @swagger
@@ -263,42 +558,68 @@ router.get('/:mentorId', async (req, res) => {
  *       403:
  *         description: User is not a mentor
  */
-router.put('/me', requireRole('mentor'), validate(updateMentorProfileSchema), async (req, res) => {
-  try {
-    const userId = req.user?.id
+router.put(
+  '/me',
+  requireRole('mentor'),
+  validate(updateMentorProfileSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
 
-    if (!userId) {
-      return res.status(401).json({
-        error: 'UNAUTHORIZED',
-        message: 'Missing user context',
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'Missing user context',
+        })
+      }
+
+      const {
+        expertiseTags,
+        yearsExp,
+        sessionPrice,
+        bio,
+        fullName,
+        headline,
+        avatarUrl,
+        linkedinUrl,
+        location,
+        languages,
+      } = req.body
+
+      const updateData: Record<string, any> = {
+        updatedAt: sql`(datetime('now'))`,
+      }
+
+      if (expertiseTags !== undefined)
+        updateData.expertiseTags = JSON.stringify(expertiseTags)
+      if (yearsExp !== undefined) updateData.yearsExp = yearsExp
+      if (sessionPrice !== undefined) updateData.sessionPrice = sessionPrice
+      if (bio !== undefined) updateData.bio = bio
+      if (fullName !== undefined) updateData.fullName = fullName
+      if (headline !== undefined) updateData.headline = headline
+      if (avatarUrl !== undefined) updateData.avatarUrl = avatarUrl
+      if (linkedinUrl !== undefined) updateData.linkedinUrl = linkedinUrl
+      if (location !== undefined) updateData.location = location
+      if (languages !== undefined)
+        updateData.languages = JSON.stringify(languages)
+
+      const updated = await db
+        .update(mentorProfiles)
+        .set(updateData)
+        .where(eq(mentorProfiles.userId, userId))
+        .returning()
+        .get()
+
+      cache.deletePattern('mentors:')
+
+      res.json(updated)
+    } catch (err) {
+      res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to update mentor profile',
       })
     }
-
-    const { expertiseTags, yearsExp, sessionPrice, bio, fullName, headline, avatarUrl, linkedinUrl, location, languages } = req.body
-
-    const updateData: Record<string, any> = {
-      updatedAt: sql`(datetime('now'))`,
-    }
-
-    if (expertiseTags !== undefined) updateData.expertiseTags = JSON.stringify(expertiseTags)
-    if (yearsExp !== undefined) updateData.yearsExp = yearsExp
-    if (sessionPrice !== undefined) updateData.sessionPrice = sessionPrice
-    if (bio !== undefined) updateData.bio = bio
-    if (fullName !== undefined) updateData.fullName = fullName
-    if (headline !== undefined) updateData.headline = headline
-    if (avatarUrl !== undefined) updateData.avatarUrl = avatarUrl
-    if (linkedinUrl !== undefined) updateData.linkedinUrl = linkedinUrl
-    if (location !== undefined) updateData.location = location
-    if (languages !== undefined) updateData.languages = JSON.stringify(languages)
-
-    const updated = await db.update(mentorProfiles).set(updateData).where(eq(mentorProfiles.userId, userId)).returning().get()
-    res.json(updated)
-  } catch (err) {
-    res.status(500).json({
-      error: 'INTERNAL_ERROR',
-      message: 'Failed to update mentor profile',
-    })
-  }
-})
+  },
+)
 
 export default router

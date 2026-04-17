@@ -28,7 +28,7 @@ const app = express()
 // CORS must be before auth handler
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || '*',
+    origin: 'http://localhost:8080',
     credentials: true,
   }),
 )
@@ -39,7 +39,10 @@ app.all('/api/auth/{*any}', toNodeHandler(auth))
 
 // Now mount express.json() for other routes
 app.use(express.json())
-
+app.use((req, res, next) => {
+  logger.info(`Req hit at ${req.url}`)
+  next()
+})
 app.use(
   helmet({
     contentSecurityPolicy: {

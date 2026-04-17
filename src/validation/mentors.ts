@@ -15,6 +15,18 @@ export const updateMentorProfileSchema = z.object({
   }),
 })
 
+export const mentorDocumentsSchema = z.object({
+  body: z.object({
+    documents: z.array(z.string().url()).default([]),
+  }),
+})
+
+export const removeMentorDocumentSchema = z.object({
+  body: z.object({
+    document: z.string().url(),
+  }),
+})
+
 export const mentorIdParamSchema = z.object({
   params: z.object({
     mentorId: z.string().min(1),

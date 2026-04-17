@@ -131,6 +131,7 @@ export const mentorProfiles = sqliteTable('mentor_profiles', {
   linkedinUrl: text('linkedin_url'),
   location: text('location').default('Kathmandu, Nepal'),
   languages: text('languages').default('["Nepali","English"]'), // JSON string
+  documents: text('documents').default('[]'), // JSON string
   expertiseTags: text('expertise_tags').notNull(), // JSON string
   yearsExp: integer('years_exp').notNull(),
   sessionPrice: integer('session_price').default(0),

@@ -22,6 +22,17 @@ import { CacheKeys, CacheTTL, cache } from '../cache'
 const router = Router()
 router.use(requireRole('admin'))
 
+function parseDocuments(value: string | null) {
+  if (!value) return []
+
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 /**
  * @swagger
  * tags:
@@ -185,7 +196,10 @@ router.get(
       const total = countResult?.count ?? 0
 
       return res.json({
-        data,
+        data: data.map(request => ({
+          ...request,
+          documents: parseDocuments(request.documents),
+        })),
         pagination: {
           page,
           limit,
@@ -248,7 +262,7 @@ router.patch(
   async (req, res) => {
     try {
       const adminId = req.user?.id!
-      const { id } = req.params
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id
       const { status, notes } = req.body
 
       const verificationRequest = await db
@@ -531,7 +545,9 @@ router.patch(
   validate(suspendMentorSchema),
   async (req, res) => {
     try {
-      const { mentorId } = req.params
+      const mentorId = Array.isArray(req.params.mentorId)
+        ? req.params.mentorId[0]
+        : req.params.mentorId
       const { suspended } = req.body
 
       const mentor = await db
