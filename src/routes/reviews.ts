@@ -9,6 +9,7 @@ import { menteeProfiles, mentorProfiles, reviews, sessions } from '../schema'
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { logger } from '../logger'
 import { cache, CacheKeys, CacheTTL } from '../cache'
+import { createNotification, getMentorUserId } from '../lib/notifications'
 
 const router = Router()
 
@@ -192,6 +193,23 @@ router.post(
       // since avgRating and reviewCount have changed
       cache.deletePattern(`mentor:reviews:${session.mentorId}`)
       cache.delete(CacheKeys.mentorProfile(session.mentorId))
+      cache.deletePattern('mentors:list')
+
+      // Notify the mentor about the new review
+      try {
+        const mentorUserId = await getMentorUserId(session.mentorId)
+        if (mentorUserId) {
+          await createNotification({
+            userId: mentorUserId,
+            type: 'review_received',
+            title: 'New Review Received',
+            body: `You received a ${rating}-star review from a mentee`,
+            data: { reviewId: newReview.id, sessionId, rating },
+          })
+        }
+      } catch (notifError) {
+        logger.error({ notifError }, 'Failed to send review_received notification')
+      }
 
       return res.status(201).json({
         ...newReview,

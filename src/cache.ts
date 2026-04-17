@@ -196,6 +196,12 @@ export const CacheTTL = {
   MENTOR_REVIEWS: 10 * 60 * 1000, // 10 minutes
   MENTOR_AVAILABILITY: 2 * 60 * 1000, // 2 minutes
   PLATFORM_STATS: 30 * 60 * 1000, // 30 minutes
+  NOTIFICATIONS: 1 * 60 * 1000, // 1 minute
+  USER_SESSIONS: 2 * 60 * 1000, // 2 minutes
+  SESSION_DETAIL: 5 * 60 * 1000, // 5 minutes
+  ADMIN_USERS: 5 * 60 * 1000, // 5 minutes
+  ADMIN_VERIFICATION: 5 * 60 * 1000, // 5 minutes
+  MENTOR_AVAILABILITY_SLOTS: 2 * 60 * 1000, // 2 minutes
 } as const;
 
 // Helper functions for common cache key patterns
@@ -212,8 +218,29 @@ export const CacheKeys = {
   mentorAvailability: (mentorId: string, weekStart: string): string =>
     `mentor:availability:${mentorId}:${weekStart}`,
 
+  mentorAvailabilitySlots: (mentorId: string): string =>
+    `mentor:availability-slots:${mentorId}`,
+
   platformStats: (): string =>
     `stats:platform`,
+
+  notifications: (userId: string, page: number, limit: number): string =>
+    `notifications:${userId}:${page}:${limit}`,
+
+  notificationUnreadCount: (userId: string): string =>
+    `notifications:unread:${userId}`,
+
+  userSessions: (userId: string, page: number, limit: number, status?: string, role?: string): string =>
+    `sessions:${userId}:${page}:${limit}:${status ?? 'all'}:${role ?? 'all'}`,
+
+  sessionDetail: (sessionId: string): string =>
+    `session:detail:${sessionId}`,
+
+  adminUsers: (page: number, limit: number, role?: string, search?: string): string =>
+    `admin:users:${page}:${limit}:${role ?? 'all'}:${search ?? ''}`,
+
+  adminVerification: (status: string, page: number, limit: number): string =>
+    `admin:verification:${status}:${page}:${limit}`,
 };
 
 export default Cache;

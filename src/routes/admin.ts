@@ -18,6 +18,7 @@ import {
 } from '../validation/admin'
 import { logger } from '../logger'
 import { CacheKeys, CacheTTL, cache } from '../cache'
+import { createNotification, getMentorUserId } from '../lib/notifications'
 
 const router = Router()
 router.use(requireRole('admin'))
@@ -160,6 +161,11 @@ router.get(
       }
       const offset = (page - 1) * limit
 
+      // Try cache first
+      const cacheKey = CacheKeys.adminVerification(status, page, limit)
+      const cached = cache.get(cacheKey)
+      if (cached) return res.json(cached)
+
       const where = eq(verificationRequests.status, status)
 
       const [data, countResult] = await Promise.all([
@@ -195,7 +201,7 @@ router.get(
 
       const total = countResult?.count ?? 0
 
-      return res.json({
+      const payload = {
         data: data.map(request => ({
           ...request,
           documents: parseDocuments(request.documents),
@@ -206,7 +212,11 @@ router.get(
           total,
           totalPages: Math.ceil(total / limit),
         },
-      })
+      }
+
+      cache.set(cacheKey, payload, CacheTTL.ADMIN_VERIFICATION)
+
+      return res.json(payload)
     } catch (err) {
       return res.status(500).json({
         error: 'INTERNAL_ERROR',
@@ -309,6 +319,26 @@ router.patch(
 
       // Bust mentor profile cache since isVerified changed
       cache.delete(CacheKeys.mentorProfile(verificationRequest.mentorId))
+      cache.deletePattern('mentors:list')
+      cache.deletePattern('admin:verification:')
+
+      // Notify the mentor about the verification result
+      try {
+        const mentorUserId = await getMentorUserId(verificationRequest.mentorId)
+        if (mentorUserId) {
+          await createNotification({
+            userId: mentorUserId,
+            type: status === 'approved' ? 'verification_approved' : 'verification_rejected',
+            title: status === 'approved' ? 'Verification Approved' : 'Verification Rejected',
+            body: status === 'approved'
+              ? 'Your mentor verification has been approved! You are now a verified mentor.'
+              : `Your mentor verification has been rejected.${notes ? ` Reason: ${notes}` : ''}`,
+            data: { verificationRequestId: id, status },
+          })
+        }
+      } catch (notifError) {
+        logger.error({ notifError }, 'Failed to send verification notification')
+      }
 
       return res.json(updated)
     } catch (err) {
@@ -377,6 +407,11 @@ router.get('/users', validate(getUsersSchema), async (req, res) => {
     }
     const offset = (page - 1) * limit
 
+    // Try cache first
+    const cacheKey = CacheKeys.adminUsers(page, limit, role, search)
+    const cached = cache.get(cacheKey)
+    if (cached) return res.json(cached)
+
     const conditions = []
     if (role) conditions.push(eq(user.role, role))
     if (search) conditions.push(like(user.name, `%${search}%`))
@@ -407,10 +442,14 @@ router.get('/users', validate(getUsersSchema), async (req, res) => {
 
     const total = countResult?.count ?? 0
 
-    return res.json({
+    const payload = {
       data,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    })
+    }
+
+    cache.set(cacheKey, payload, CacheTTL.ADMIN_USERS)
+
+    return res.json(payload)
   } catch (err) {
     return res
       .status(500)
@@ -575,6 +614,7 @@ router.patch(
       // Bust mentor profile and list caches since isActive changed
       cache.delete(CacheKeys.mentorProfile(mentorId))
       cache.deletePattern('mentors:list')
+      cache.deletePattern('admin:users:')
 
       return res.json(updated)
     } catch (err) {

@@ -7,6 +7,8 @@ import { menteeProfiles, mentorProfiles, sessions } from '../schema'
 import { and, eq, inArray, or, sql } from 'drizzle-orm'
 import { getMentorDetailsById, getMentorDetailsByUserId } from '../lib/mentors'
 import { assertParticipant, getProfilesForUser } from '../lib/session'
+import { createNotification, getMentorUserId, getMenteeUserId } from '../lib/notifications'
+import { cache, CacheKeys, CacheTTL } from '../cache'
 import {
   bookSessionSchema,
   cancelSessionSchema,
@@ -190,6 +192,25 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
         .get()
     })
 
+    // Notify the mentor that a session was booked
+    try {
+      const mentorUserId = await getMentorUserId(mentorId)
+      if (mentorUserId) {
+        await createNotification({
+          userId: mentorUserId,
+          type: 'session_booked',
+          title: 'New Session Booked',
+          body: `A mentee has booked a session with you on ${start.toLocaleDateString()}`,
+          data: { sessionId: newSession.id, mentorId, scheduledAt: scheduledAtISO },
+        })
+      }
+    } catch (notifError) {
+      logger.error({ notifError }, 'Failed to send session_booked notification')
+    }
+
+    // Invalidate session caches
+    cache.deletePattern(`sessions:`)
+
     return res.status(201).json(newSession)
   } catch (error) {
     logger.error(`Error when booking session ${error}`)
@@ -255,6 +276,11 @@ router.get('/', requireAuth, validate(getSessionsQuerySchema), async (req, res) 
       page: number
       limit: number
     }
+
+    // Try cache first
+    const cacheKey = CacheKeys.userSessions(userId, page, limit, status, role)
+    const cached = cache.get(cacheKey)
+    if (cached) return res.json(cached)
     const offset = (page - 1) * limit
 
     const { mentor, mentee } = await getProfilesForUser(userId)
@@ -292,10 +318,14 @@ router.get('/', requireAuth, validate(getSessionsQuerySchema), async (req, res) 
 
     const total = countResult?.count ?? 0
 
-    return res.json({
+    const payload = {
       data,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    })
+    }
+
+    cache.set(cacheKey, payload, CacheTTL.USER_SESSIONS)
+
+    return res.json(payload)
   } catch (error) {
     logger.error(`Error fetching user sessions ${error}`)
     return res.status(500).json({ error: 'Internal Server Error' })
@@ -337,6 +367,20 @@ router.get('/:sessionId', requireAuth, validate(sessionIdParamSchema), async (re
 
     const { sessionId } = req.params as { sessionId: string }
 
+    // Try cache first
+    const cacheKey = CacheKeys.sessionDetail(sessionId)
+    const cached = cache.get(cacheKey)
+    if (cached) {
+      // Still need to verify the user is a participant
+      const { mentor, mentee } = await getProfilesForUser(userId)
+      const participant = assertParticipant(cached as any, mentor?.id, mentee?.id)
+      if (!participant)
+        return res
+          .status(403)
+          .json({ error: 'FORBIDDEN', message: 'Not authorized' })
+      return res.json(cached)
+    }
+
     const session = await db
       .select()
       .from(sessions)
@@ -355,6 +399,8 @@ router.get('/:sessionId', requireAuth, validate(sessionIdParamSchema), async (re
       return res
         .status(403)
         .json({ error: 'FORBIDDEN', message: 'Not authorized' })
+
+    cache.set(cacheKey, session, CacheTTL.SESSION_DETAIL)
 
     return res.json(session)
   } catch (err) {
@@ -429,6 +475,26 @@ router.patch(
         .where(eq(sessions.id, session.id))
         .returning()
         .get()
+
+      // Notify the mentee that the session is confirmed
+      try {
+        const menteeUserId = await getMenteeUserId(session.menteeId)
+        if (menteeUserId) {
+          await createNotification({
+            userId: menteeUserId,
+            type: 'session_confirmed',
+            title: 'Session Confirmed',
+            body: `Your session on ${new Date(session.scheduledAt).toLocaleDateString()} has been confirmed by the mentor`,
+            data: { sessionId: session.id, mentorId: session.mentorId },
+          })
+        }
+      } catch (notifError) {
+        logger.error({ notifError }, 'Failed to send session_confirmed notification')
+      }
+
+      // Invalidate caches
+      cache.deletePattern('sessions:')
+      cache.delete(CacheKeys.sessionDetail(session.id))
 
       return res.json(updated)
     } catch (error) {
@@ -518,6 +584,40 @@ router.patch('/:sessionId/cancel', requireAuth, validate(cancelSessionSchema), a
       .returning()
       .get()
 
+    // Notify the other party about cancellation
+    try {
+      const isCancelledByMentor = mentor && mentor.id === session.mentorId
+      if (isCancelledByMentor) {
+        const menteeUserId = await getMenteeUserId(session.menteeId)
+        if (menteeUserId) {
+          await createNotification({
+            userId: menteeUserId,
+            type: 'session_cancelled',
+            title: 'Session Cancelled',
+            body: `Your session on ${new Date(session.scheduledAt).toLocaleDateString()} has been cancelled by the mentor`,
+            data: { sessionId: session.id, cancelledBy: userId },
+          })
+        }
+      } else {
+        const mentorUserId = await getMentorUserId(session.mentorId)
+        if (mentorUserId) {
+          await createNotification({
+            userId: mentorUserId,
+            type: 'session_cancelled',
+            title: 'Session Cancelled',
+            body: `The session on ${new Date(session.scheduledAt).toLocaleDateString()} has been cancelled by the mentee`,
+            data: { sessionId: session.id, cancelledBy: userId },
+          })
+        }
+      }
+    } catch (notifError) {
+      logger.error({ notifError }, 'Failed to send session_cancelled notification')
+    }
+
+    // Invalidate caches
+    cache.deletePattern('sessions:')
+    cache.delete(CacheKeys.sessionDetail(session.id))
+
     return res.json(updated)
   } catch (error) {
     logger.error(`Error cancelling session ${error}`)
@@ -606,6 +706,28 @@ router.patch(
           .set({ totalSessions: sql`${mentorProfiles.totalSessions} + 1` })
           .where(eq(mentorProfiles.id, mentorProfile.id)),
       ])
+
+      // Notify the mentee that the session is completed
+      try {
+        const menteeUserId = await getMenteeUserId(session.menteeId)
+        if (menteeUserId) {
+          await createNotification({
+            userId: menteeUserId,
+            type: 'session_completed',
+            title: 'Session Completed',
+            body: `Your session on ${new Date(session.scheduledAt).toLocaleDateString()} has been marked as completed. Don't forget to leave a review!`,
+            data: { sessionId: session.id, mentorId: session.mentorId },
+          })
+        }
+      } catch (notifError) {
+        logger.error({ notifError }, 'Failed to send session_completed notification')
+      }
+
+      // Invalidate caches
+      cache.deletePattern('sessions:')
+      cache.delete(CacheKeys.sessionDetail(session.id))
+      cache.delete(CacheKeys.mentorProfile(mentorProfile.id))
+      cache.deletePattern('mentors:list')
 
       return res.json(updated)
     } catch (error) {

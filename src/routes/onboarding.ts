@@ -18,6 +18,7 @@ import {
   mentorProfileSchema,
   menteeProfileSchema,
 } from '../validation'
+import { cache } from '../cache'
 
 const router = Router()
 
@@ -325,6 +326,11 @@ router.post(
           })
         }
       })
+
+      // Invalidate caches
+      cache.deletePattern('mentors:')
+      cache.deletePattern('admin:verification:')
+
       res.json({ message: 'Mentor profile created' })
     } catch (error) {
       logger.error(`Error creating mentor profile: ${error}`)
