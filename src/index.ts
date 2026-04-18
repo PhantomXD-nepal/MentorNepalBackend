@@ -69,7 +69,12 @@ app.use(
   }),
 )
 
-// Health check
+// Health check (not logged by requestLogger due to SKIP_PATHS)
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+})
+
+// Root
 app.get('/', (req, res) => {
   res.send('MentorNepal API running')
 })
@@ -84,8 +89,26 @@ app.use('/api/notifications', notificationsRoutes)
 app.use('/api/admin', adminRoutes)
 
 const PORT = process.env.PORT || 3001
+const SELF_PING_INTERVAL = 60 * 1000 // 60 seconds
 
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`)
   logger.info(`Better Auth mounted at /api/auth/*`)
+
+  // Self-ping cron: keeps the server warm and detects crashes
+  const healthUrl = `http://localhost:${PORT}/health`
+  setInterval(async () => {
+    try {
+      const res = await fetch(healthUrl, {
+        headers: { 'x-self-ping': 'true' },
+      })
+      if (!res.ok) {
+        logger.warn({ status: res.status }, 'Self-ping returned non-200 status')
+      }
+    } catch (err) {
+      logger.error({ err }, 'Self-ping failed — server may be unhealthy')
+    }
+  }, SELF_PING_INTERVAL)
+
+  logger.info(`Self-ping cron started: GET ${healthUrl} every ${SELF_PING_INTERVAL / 1000}s`)
 })
