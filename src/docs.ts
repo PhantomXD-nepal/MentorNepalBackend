@@ -23,7 +23,11 @@ const options = {
       },
     },
   },
-  apis: ['./src/routes/*.ts'],
+  apis: ['./src/routes/**/*.ts', './src/**/*.ts'],
 }
 
 export const swaggerSpec = swaggerJsdoc(options)
+
+import fs from 'fs'
+
+fs.writeFileSync('./swagger.json', JSON.stringify(swaggerSpec, null, 2))

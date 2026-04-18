@@ -1,4 +1,7 @@
 import { Router } from 'express'
+import { auth } from '../auth'
+import { fromNodeHeaders } from 'better-auth/node'
+import { logger } from '../logger'
 
 const router = Router()
 
@@ -128,8 +131,12 @@ router.post('/sign-out', (req, res) => {
  *       401:
  *         description: No active session
  */
-router.get('/session', (req, res) => {
-  res.status(501).json({ message: 'Handled by better-auth' })
+router.get('/session', async (req, res) => {
+  const session = await auth.api.getSession({
+    headers: fromNodeHeaders(req.headers),
+  })
+  logger.debug(session)
+  return res.json(session)
 })
 
 /**

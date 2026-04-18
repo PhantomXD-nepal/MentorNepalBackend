@@ -1,4 +1,15 @@
 import { Router } from 'express'
+import { requireAuth, validate } from '../middleware'
+import {
+  getNotificationsQuerySchema,
+  notificationIdParamSchema,
+} from '../validation/notifications'
+import {
+  getUserNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from '../lib/notifications'
+import { logger } from '../logger'
 
 const router = Router()
 
@@ -22,12 +33,12 @@ const router = Router()
  *           type: string
  *         type:
  *           type: string
- *           enum: [session_reminder, session_confirmed, session_cancelled, session_completed, review_received, verification_approved, verification_rejected]
+ *           enum: [session_booked, session_confirmed, session_cancelled, session_completed, session_reminder, review_received, verification_approved, verification_rejected]
  *         title:
  *           type: string
- *         message:
+ *         body:
  *           type: string
- *         read:
+ *         isRead:
  *           type: boolean
  *         data:
  *           type: object
@@ -79,9 +90,36 @@ const router = Router()
  *       401:
  *         description: Not authenticated
  */
-router.get('/', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
-})
+router.get(
+  '/',
+  requireAuth,
+  validate(getNotificationsQuerySchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      if (!userId) {
+        return res.status(401).json({ error: 'UNAUTHORIZED' })
+      }
+
+      const { unreadOnly, page, limit } = req.query as unknown as {
+        unreadOnly: boolean
+        page: number
+        limit: number
+      }
+
+      const result = await getUserNotifications(userId, page, limit, unreadOnly) as Record<string, any> & { _cached?: boolean }
+      if (result._cached) res.locals.cached = true
+      const { _cached, ...payload } = result
+      return res.json(payload)
+    } catch (error) {
+      logger.error({ error }, 'Error fetching notifications')
+      return res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to fetch notifications',
+      })
+    }
+  },
+)
 
 /**
  * @swagger
@@ -97,8 +135,22 @@ router.get('/', (req, res) => {
  *       401:
  *         description: Not authenticated
  */
-router.patch('/read', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
+router.patch('/read', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id
+    if (!userId) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' })
+    }
+
+    await markAllNotificationsRead(userId)
+    return res.json({ message: 'All notifications marked as read' })
+  } catch (error) {
+    logger.error({ error }, 'Error marking all notifications as read')
+    return res.status(500).json({
+      error: 'INTERNAL_ERROR',
+      message: 'Failed to mark notifications as read',
+    })
+  }
 })
 
 /**
@@ -125,8 +177,36 @@ router.patch('/read', (req, res) => {
  *       404:
  *         description: Notification not found
  */
-router.patch('/:id/read', (req, res) => {
-  res.status(501).json({ message: 'Not implemented' })
-})
+router.patch(
+  '/:id/read',
+  requireAuth,
+  validate(notificationIdParamSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      if (!userId) {
+        return res.status(401).json({ error: 'UNAUTHORIZED' })
+      }
+
+      const { id } = req.params as { id: string }
+      const notification = await markNotificationRead(userId, id)
+
+      if (!notification) {
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Notification not found',
+        })
+      }
+
+      return res.json(notification)
+    } catch (error) {
+      logger.error({ error }, 'Error marking notification as read')
+      return res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: 'Failed to mark notification as read',
+      })
+    }
+  },
+)
 
 export default router
