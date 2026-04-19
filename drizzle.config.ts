@@ -1,10 +1,13 @@
+import dotenv from 'dotenv'
 import { defineConfig } from 'drizzle-kit'
+
+dotenv.config()
 
 export default defineConfig({
   out: './drizzle/migrations',
   schema: './src/schema.ts',
-  dialect: 'sqlite',
+  dialect: 'postgresql',
   dbCredentials: {
-    url: process.env.DATABASE_URL || './data/mentornepal.db',
+    url: process.env.DATABASE_URL!,
   },
 })

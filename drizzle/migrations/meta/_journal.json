@@ -29,6 +29,13 @@
       "when": 1776355200000,
       "tag": "0003_neat_pitch",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1776606113116,
+      "tag": "0004_deep_earthquake",
+      "breakpoints": true
     }
   ]
 }

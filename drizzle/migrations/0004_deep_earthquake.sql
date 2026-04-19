@@ -1,0 +1,1 @@
+ALTER TABLE `mentor_profiles` ADD `documents` text DEFAULT '[]';
