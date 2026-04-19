@@ -7,7 +7,11 @@ import { menteeProfiles, mentorProfiles, sessions } from '../schema'
 import { and, eq, inArray, or, sql } from 'drizzle-orm'
 import { getMentorDetailsById, getMentorDetailsByUserId } from '../lib/mentors'
 import { assertParticipant, getProfilesForUser } from '../lib/session'
-import { createNotification, getMentorUserId, getMenteeUserId } from '../lib/notifications'
+import {
+  createNotification,
+  getMentorUserId,
+  getMenteeUserId,
+} from '../lib/notifications'
 import { cache, CacheKeys, CacheTTL } from '../cache'
 import {
   bookSessionSchema,
@@ -201,7 +205,11 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
           type: 'session_booked',
           title: 'New Session Booked',
           body: `A mentee has booked a session with you on ${start.toLocaleDateString()}`,
-          data: { sessionId: newSession.id, mentorId, scheduledAt: scheduledAtISO },
+          data: {
+            sessionId: newSession.id,
+            mentorId,
+            scheduledAt: scheduledAtISO,
+          },
         })
       }
     } catch (notifError) {
@@ -264,73 +272,92 @@ router.post('/', requireAuth, validate(bookSessionSchema), async (req, res) => {
  *       401:
  *         description: Not authenticated
  */
-router.get('/', requireAuth, validate(getSessionsQuerySchema), async (req, res) => {
-  try {
-    const userId = req.user?.id
+router.get(
+  '/',
+  requireAuth,
+  validate(getSessionsQuerySchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
 
-    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const { status, role, page, limit } = req.query as unknown as {
-      status?: 'pending' | 'confirmed' | 'cancelled' | 'completed'
-      role?: 'mentor' | 'mentee'
-      page: number
-      limit: number
+      const { status, role, page, limit } = req.query as unknown as {
+        status?: 'pending' | 'confirmed' | 'cancelled' | 'completed'
+        role?: 'mentor' | 'mentee'
+        page: number
+        limit: number
+      }
+
+      // Try cache first
+      const cacheKey = CacheKeys.userSessions(userId, page, limit, status, role)
+      const cached = cache.get(cacheKey)
+      if (cached) {
+        res.locals.cached = true
+        return res.json(cached)
+      }
+      const offset = (page - 1) * limit
+
+      const { mentor, mentee } = await getProfilesForUser(userId)
+      let roleFilter
+      if (role === 'mentor' && mentor) {
+        roleFilter = eq(sessions.mentorId, mentor.id)
+      } else if (role === 'mentee' && mentee) {
+        roleFilter = eq(sessions.menteeId, mentee.id)
+      } else {
+        // Return sessions where user is either participant
+        const conditions = []
+        if (mentor) conditions.push(eq(sessions.mentorId, mentor.id))
+        if (mentee) conditions.push(eq(sessions.menteeId, mentee.id))
+        if (conditions.length === 0)
+          return res.json({
+            data: [],
+            pagination: { page, limit, total: 0, totalPages: 0 },
+          })
+        roleFilter = conditions.length === 1 ? conditions[0] : or(...conditions)
+      }
+
+      const statusFilter = status ? eq(sessions.status, status) : undefined
+      const whereClause = statusFilter
+        ? and(roleFilter, statusFilter)
+        : roleFilter
+
+      const [data, countResult] = await Promise.all([
+        db
+          .select()
+          .from(sessions)
+          .where(whereClause)
+          .limit(limit)
+          .offset(offset)
+          .all(),
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(sessions)
+          .where(whereClause)
+          .get(),
+      ])
+
+      const total = countResult?.count ?? 0
+
+      const payload = {
+        data,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      }
+
+      cache.set(cacheKey, payload, CacheTTL.USER_SESSIONS)
+
+      return res.json(payload)
+    } catch (error) {
+      logger.error(`Error fetching user sessions ${error}`)
+      return res.status(500).json({ error: 'Internal Server Error' })
     }
-
-    // Try cache first
-    const cacheKey = CacheKeys.userSessions(userId, page, limit, status, role)
-    const cached = cache.get(cacheKey)
-    if (cached) { res.locals.cached = true; return res.json(cached) }
-    const offset = (page - 1) * limit
-
-    const { mentor, mentee } = await getProfilesForUser(userId)
-    let roleFilter
-    if (role === 'mentor' && mentor) {
-      roleFilter = eq(sessions.mentorId, mentor.id)
-    } else if (role === 'mentee' && mentee) {
-      roleFilter = eq(sessions.menteeId, mentee.id)
-    } else {
-      // Return sessions where user is either participant
-      const conditions = []
-      if (mentor) conditions.push(eq(sessions.mentorId, mentor.id))
-      if (mentee) conditions.push(eq(sessions.menteeId, mentee.id))
-      if (conditions.length === 0)
-        return res.json({
-          data: [],
-          pagination: { page, limit, total: 0, totalPages: 0 },
-        })
-      roleFilter = conditions.length === 1 ? conditions[0] : or(...conditions)
-    }
-
-    const statusFilter = status
-      ? eq(sessions.status, status)
-      : undefined
-    const whereClause = statusFilter ? and(roleFilter, statusFilter) : roleFilter
-
-    const [data, countResult] = await Promise.all([
-      db.select().from(sessions).where(whereClause).limit(limit).offset(offset).all(),
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(sessions)
-        .where(whereClause)
-        .get(),
-    ])
-
-    const total = countResult?.count ?? 0
-
-    const payload = {
-      data,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    }
-
-    cache.set(cacheKey, payload, CacheTTL.USER_SESSIONS)
-
-    return res.json(payload)
-  } catch (error) {
-    logger.error(`Error fetching user sessions ${error}`)
-    return res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+  },
+)
 
 /**
  * @swagger
@@ -360,56 +387,65 @@ router.get('/', requireAuth, validate(getSessionsQuerySchema), async (req, res) 
  *       404:
  *         description: Session not found
  */
-router.get('/:sessionId', requireAuth, validate(sessionIdParamSchema), async (req, res) => {
-  try {
-    const userId = req.user?.id
-    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+router.get(
+  '/:sessionId',
+  requireAuth,
+  validate(sessionIdParamSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const { sessionId } = req.params as { sessionId: string }
+      const { sessionId } = req.params as { sessionId: string }
 
-    // Try cache first
-    const cacheKey = CacheKeys.sessionDetail(sessionId)
-    const cached = cache.get(cacheKey)
-    if (cached) {
-      // Still need to verify the user is a participant
+      // Try cache first
+      const cacheKey = CacheKeys.sessionDetail(sessionId)
+      const cached = cache.get(cacheKey)
+      if (cached) {
+        // Still need to verify the user is a participant
+        const { mentor, mentee } = await getProfilesForUser(userId)
+        const participant = assertParticipant(
+          cached as any,
+          mentor?.id,
+          mentee?.id,
+        )
+        if (!participant)
+          return res
+            .status(403)
+            .json({ error: 'FORBIDDEN', message: 'Not authorized' })
+        res.locals.cached = true
+        return res.json(cached)
+      }
+
+      const session = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .get()
+
+      if (!session)
+        return res
+          .status(404)
+          .json({ error: 'NOT_FOUND', message: 'Session not found' })
+
       const { mentor, mentee } = await getProfilesForUser(userId)
-      const participant = assertParticipant(cached as any, mentor?.id, mentee?.id)
+      const participant = assertParticipant(session, mentor?.id, mentee?.id)
+
       if (!participant)
         return res
           .status(403)
           .json({ error: 'FORBIDDEN', message: 'Not authorized' })
-      res.locals.cached = true
-      return res.json(cached)
+
+      cache.set(cacheKey, session, CacheTTL.SESSION_DETAIL)
+
+      return res.json(session)
+    } catch (err) {
+      return res
+        .status(500)
+        .json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch session' })
     }
-
-    const session = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .get()
-
-    if (!session)
-      return res
-        .status(404)
-        .json({ error: 'NOT_FOUND', message: 'Session not found' })
-
-    const { mentor, mentee } = await getProfilesForUser(userId)
-    const participant = assertParticipant(session, mentor?.id, mentee?.id)
-
-    if (!participant)
-      return res
-        .status(403)
-        .json({ error: 'FORBIDDEN', message: 'Not authorized' })
-
-    cache.set(cacheKey, session, CacheTTL.SESSION_DETAIL)
-
-    return res.json(session)
-  } catch (err) {
-    return res
-      .status(500)
-      .json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch session' })
-  }
-})
+  },
+)
 
 /**
  * @swagger
@@ -460,7 +496,10 @@ router.patch(
         return res
           .status(404)
           .json({ error: 'NOT_FOUND', message: 'Session not found' })
-      if (!mentorProfile || session.mentorId !== (mentorProfile as { id: string }).id)
+      if (
+        !mentorProfile ||
+        session.mentorId !== (mentorProfile as { id: string }).id
+      )
         return res
           .status(403)
           .json({ error: 'FORBIDDEN', message: 'Not your session' })
@@ -490,7 +529,10 @@ router.patch(
           })
         }
       } catch (notifError) {
-        logger.error({ notifError }, 'Failed to send session_confirmed notification')
+        logger.error(
+          { notifError },
+          'Failed to send session_confirmed notification',
+        )
       }
 
       // Invalidate caches
@@ -537,94 +579,104 @@ router.patch(
  *       404:
  *         description: Session not found
  */
-router.patch('/:sessionId/cancel', requireAuth, validate(cancelSessionSchema), async (req, res) => {
-  try {
-    const userId = req.user?.id
-    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
-
-    const sessionId = req.params.sessionId
-    if (Array.isArray(sessionId)) {
-      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
-    }
-
-    const session = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .get()
-
-    if (!session)
-      return res
-        .status(404)
-        .json({ error: 'NOT_FOUND', message: 'Session Not Found' })
-
-    const { mentor, mentee } = await getProfilesForUser(userId)
-
-    if (!mentor || mentor.id !== session.mentorId)
-      return res.status(403).json({
-        error: 'FORBIDDEN',
-        message: 'Not authorized to cancel this session',
-      })
-
-    if (session.status === 'cancelled' || session.status === 'completed') {
-      return res.status(409).json({
-        error: 'CONFLICT',
-        message: 'Session is already completed or is cancelled',
-      })
-    }
-
-    const updated = await db
-      .update(sessions)
-      .set({
-        status: 'cancelled',
-        cancelledBy: userId,
-        cancelReason: req.body.reason ?? null,
-        updatedAt: sql`(datetime('now'))`,
-      })
-      .where(eq(sessions.id, session.id))
-      .returning()
-      .get()
-
-    // Notify the other party about cancellation
+router.patch(
+  '/:sessionId/cancel',
+  requireAuth,
+  validate(cancelSessionSchema),
+  async (req, res) => {
     try {
-      const isCancelledByMentor = mentor && mentor.id === session.mentorId
-      if (isCancelledByMentor) {
-        const menteeUserId = await getMenteeUserId(session.menteeId)
-        if (menteeUserId) {
-          await createNotification({
-            userId: menteeUserId,
-            type: 'session_cancelled',
-            title: 'Session Cancelled',
-            body: `Your session on ${new Date(session.scheduledAt).toLocaleDateString()} has been cancelled by the mentor`,
-            data: { sessionId: session.id, cancelledBy: userId },
-          })
-        }
-      } else {
-        const mentorUserId = await getMentorUserId(session.mentorId)
-        if (mentorUserId) {
-          await createNotification({
-            userId: mentorUserId,
-            type: 'session_cancelled',
-            title: 'Session Cancelled',
-            body: `The session on ${new Date(session.scheduledAt).toLocaleDateString()} has been cancelled by the mentee`,
-            data: { sessionId: session.id, cancelledBy: userId },
-          })
-        }
+      const userId = req.user?.id
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+      const sessionId = req.params.sessionId
+      if (Array.isArray(sessionId)) {
+        return res
+          .status(400)
+          .json({ error: 'BAD_REQUEST', message: 'Invalid session ID' })
       }
-    } catch (notifError) {
-      logger.error({ notifError }, 'Failed to send session_cancelled notification')
+
+      const session = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .get()
+
+      if (!session)
+        return res
+          .status(404)
+          .json({ error: 'NOT_FOUND', message: 'Session Not Found' })
+
+      const { mentor, mentee } = await getProfilesForUser(userId)
+
+      if (!mentor || mentor.id !== session.mentorId)
+        return res.status(403).json({
+          error: 'FORBIDDEN',
+          message: 'Not authorized to cancel this session',
+        })
+
+      if (session.status === 'cancelled' || session.status === 'completed') {
+        return res.status(409).json({
+          error: 'CONFLICT',
+          message: 'Session is already completed or is cancelled',
+        })
+      }
+
+      const updated = await db
+        .update(sessions)
+        .set({
+          status: 'cancelled',
+          cancelledBy: userId,
+          cancelReason: req.body.reason ?? null,
+          updatedAt: sql`(datetime('now'))`,
+        })
+        .where(eq(sessions.id, session.id))
+        .returning()
+        .get()
+
+      // Notify the other party about cancellation
+      try {
+        const isCancelledByMentor = mentor && mentor.id === session.mentorId
+        if (isCancelledByMentor) {
+          const menteeUserId = await getMenteeUserId(session.menteeId)
+          if (menteeUserId) {
+            await createNotification({
+              userId: menteeUserId,
+              type: 'session_cancelled',
+              title: 'Session Cancelled',
+              body: `Your session on ${new Date(session.scheduledAt).toLocaleDateString()} has been cancelled by the mentor`,
+              data: { sessionId: session.id, cancelledBy: userId },
+            })
+          }
+        } else {
+          const mentorUserId = await getMentorUserId(session.mentorId)
+          if (mentorUserId) {
+            await createNotification({
+              userId: mentorUserId,
+              type: 'session_cancelled',
+              title: 'Session Cancelled',
+              body: `The session on ${new Date(session.scheduledAt).toLocaleDateString()} has been cancelled by the mentee`,
+              data: { sessionId: session.id, cancelledBy: userId },
+            })
+          }
+        }
+      } catch (notifError) {
+        logger.error(
+          { notifError },
+          'Failed to send session_cancelled notification',
+        )
+      }
+
+      // Invalidate caches
+      cache.deletePattern('sessions:')
+      cache.delete(CacheKeys.sessionDetail(session.id))
+
+      return res.json(updated)
+    } catch (error) {
+      logger.error(`Error cancelling session ${error}`)
+      return res.status(500).json({ error: 'Internal Server Error' })
     }
-
-    // Invalidate caches
-    cache.deletePattern('sessions:')
-    cache.delete(CacheKeys.sessionDetail(session.id))
-
-    return res.json(updated)
-  } catch (error) {
-    logger.error(`Error cancelling session ${error}`)
-    return res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+  },
+)
 
 /**
  * @swagger
@@ -721,7 +773,10 @@ router.patch(
           })
         }
       } catch (notifError) {
-        logger.error({ notifError }, 'Failed to send session_completed notification')
+        logger.error(
+          { notifError },
+          'Failed to send session_completed notification',
+        )
       }
 
       // Invalidate caches
@@ -771,62 +826,67 @@ router.patch(
  *       404:
  *         description: Session not found
  */
-router.get('/:sessionId/join', requireAuth, validate(sessionIdParamSchema), async (req, res) => {
-  try {
-    const userId = req.user?.id
-    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+router.get(
+  '/:sessionId/join',
+  requireAuth,
+  validate(sessionIdParamSchema),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-    const { sessionId } = req.params as { sessionId: string }
+      const { sessionId } = req.params as { sessionId: string }
 
-    const session = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .get()
+      const session = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .get()
 
-    if (!session)
+      if (!session)
+        return res
+          .status(404)
+          .json({ error: 'NOT_FOUND', message: 'Session not found' })
+
+      const { mentor, mentee } = await getProfilesForUser(userId)
+      const participant = assertParticipant(session, mentor?.id, mentee?.id)
+
+      if (!participant)
+        return res
+          .status(403)
+          .json({ error: 'FORBIDDEN', message: 'Not authorized' })
+
+      if (session.status !== 'confirmed') {
+        return res
+          .status(403)
+          .json({ error: 'FORBIDDEN', message: 'Session is not confirmed' })
+      }
+
+      // Allow joining 5 minutes early, block after session should have ended
+      const now = Date.now()
+      const start = new Date(session.scheduledAt).getTime()
+      const end = start + (session.durationMins ?? 30) * 60000
+      const EARLY_JOIN_MS = 5 * 60 * 1000
+
+      if (now < start - EARLY_JOIN_MS) {
+        return res
+          .status(403)
+          .json({ error: 'TOO_EARLY', message: 'Session has not started yet' })
+      }
+
+      if (now > end) {
+        return res
+          .status(403)
+          .json({ error: 'EXPIRED', message: 'Session has already ended' })
+      }
+
+      return res.json({ roomUrl: session.meetingUrl })
+    } catch (err) {
       return res
-        .status(404)
-        .json({ error: 'NOT_FOUND', message: 'Session not found' })
-
-    const { mentor, mentee } = await getProfilesForUser(userId)
-    const participant = assertParticipant(session, mentor?.id, mentee?.id)
-
-    if (!participant)
-      return res
-        .status(403)
-        .json({ error: 'FORBIDDEN', message: 'Not authorized' })
-
-    if (session.status !== 'confirmed') {
-      return res
-        .status(403)
-        .json({ error: 'FORBIDDEN', message: 'Session is not confirmed' })
+        .status(500)
+        .json({ error: 'INTERNAL_ERROR', message: 'Failed to get room URL' })
     }
-
-    // Allow joining 5 minutes early, block after session should have ended
-    const now = Date.now()
-    const start = new Date(session.scheduledAt).getTime()
-    const end = start + (session.durationMins ?? 30) * 60000
-    const EARLY_JOIN_MS = 5 * 60 * 1000
-
-    if (now < start - EARLY_JOIN_MS) {
-      return res
-        .status(403)
-        .json({ error: 'TOO_EARLY', message: 'Session has not started yet' })
-    }
-
-    if (now > end) {
-      return res
-        .status(403)
-        .json({ error: 'EXPIRED', message: 'Session has already ended' })
-    }
-
-    return res.json({ roomUrl: session.meetingUrl })
-  } catch (err) {
-    return res
-      .status(500)
-      .json({ error: 'INTERNAL_ERROR', message: 'Failed to get room URL' })
-  }
-})
+  },
+)
 
 export default router

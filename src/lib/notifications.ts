@@ -86,10 +86,7 @@ export async function getUserNotifications(
       .select({ count: sql<number>`count(*)` })
       .from(notifications)
       .where(
-        and(
-          eq(notifications.userId, userId),
-          sql`${notifications.isRead} = 0`,
-        ),
+        and(eq(notifications.userId, userId), sql`${notifications.isRead} = 0`),
       )
       .get(),
   ])
@@ -128,10 +125,7 @@ export async function getUnreadCount(userId: string): Promise<number> {
     .select({ count: sql<number>`count(*)` })
     .from(notifications)
     .where(
-      and(
-        eq(notifications.userId, userId),
-        sql`${notifications.isRead} = 0`,
-      ),
+      and(eq(notifications.userId, userId), sql`${notifications.isRead} = 0`),
     )
     .get()
 
@@ -150,7 +144,12 @@ export async function markNotificationRead(
   const notification = await db
     .select()
     .from(notifications)
-    .where(and(eq(notifications.id, notificationId), eq(notifications.userId, userId)))
+    .where(
+      and(
+        eq(notifications.id, notificationId),
+        eq(notifications.userId, userId),
+      ),
+    )
     .get()
 
   if (!notification) return null
@@ -175,10 +174,7 @@ export async function markAllNotificationsRead(userId: string) {
     .update(notifications)
     .set({ isRead: true })
     .where(
-      and(
-        eq(notifications.userId, userId),
-        sql`${notifications.isRead} = 0`,
-      ),
+      and(eq(notifications.userId, userId), sql`${notifications.isRead} = 0`),
     )
 
   // Invalidate notification caches
@@ -191,7 +187,9 @@ export async function markAllNotificationsRead(userId: string) {
 /**
  * Helper: resolve a mentor's userId from their mentor profile ID.
  */
-export async function getMentorUserId(mentorId: string): Promise<string | null> {
+export async function getMentorUserId(
+  mentorId: string,
+): Promise<string | null> {
   const result = await db
     .select({ userId: mentorProfiles.userId })
     .from(mentorProfiles)
@@ -203,7 +201,9 @@ export async function getMentorUserId(mentorId: string): Promise<string | null> 
 /**
  * Helper: resolve a mentee's userId from their mentee profile ID.
  */
-export async function getMenteeUserId(menteeId: string): Promise<string | null> {
+export async function getMenteeUserId(
+  menteeId: string,
+): Promise<string | null> {
   const result = await db
     .select({ userId: menteeProfiles.userId })
     .from(menteeProfiles)
