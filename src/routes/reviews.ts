@@ -208,7 +208,10 @@ router.post(
           })
         }
       } catch (notifError) {
-        logger.error({ notifError }, 'Failed to send review_received notification')
+        logger.error(
+          { notifError },
+          'Failed to send review_received notification',
+        )
       }
 
       return res.status(201).json({
@@ -289,7 +292,10 @@ router.get('/:mentorId', validate(getMentorReviewsSchema), async (req, res) => {
 
     const cacheKey = CacheKeys.mentorReviews(mentorId, page, limit)
     const cached = cache.get(cacheKey)
-    if (cached) { res.locals.cached = true; return res.json(cached) }
+    if (cached) {
+      res.locals.cached = true
+      return res.json(cached)
+    }
 
     const mentor = await db
       .select()

@@ -171,7 +171,9 @@ router.get(
   async (req, res) => {
     try {
       const filters = req.query as unknown as MentorFilters
-      const result = await fetchMentors(filters) as Record<string, any> & { _cached?: boolean }
+      const result = (await fetchMentors(filters)) as Record<string, any> & {
+        _cached?: boolean
+      }
       if (result._cached) res.locals.cached = true
       const { _cached, ...payload } = result
       res.json(payload)
@@ -518,7 +520,9 @@ router.delete(
  */
 router.get('/:mentorId', async (req, res) => {
   try {
-    const result = await getMentorDetailsById(req.params.mentorId) as Record<string, any> & { _cached?: boolean } | null
+    const result = (await getMentorDetailsById(req.params.mentorId)) as
+      | (Record<string, any> & { _cached?: boolean })
+      | null
     if (result && result._cached) res.locals.cached = true
     if (result) {
       const { _cached, ...payload } = result

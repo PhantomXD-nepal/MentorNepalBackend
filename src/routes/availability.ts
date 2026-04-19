@@ -91,7 +91,10 @@ router.get(
       // Try cache first
       const cacheKey = CacheKeys.mentorAvailabilitySlots(mentorId)
       const cached = cache.get(cacheKey)
-      if (cached) { res.locals.cached = true; return res.json(cached) }
+      if (cached) {
+        res.locals.cached = true
+        return res.json(cached)
+      }
 
       const mentor = await db
         .select()
@@ -193,7 +196,11 @@ router.put(
           .json({ error: 'FORBIDDEN', message: 'Mentor profile not found' })
       }
 
-      const { slots }: { slots: Array<{ dayOfWeek: number; startTime: string; endTime: string }> } = req.body
+      const {
+        slots,
+      }: {
+        slots: Array<{ dayOfWeek: number; startTime: string; endTime: string }>
+      } = req.body
 
       await db.transaction(tx => {
         tx.delete(availabilitySlots)
@@ -273,7 +280,10 @@ router.get(
 
       const cacheKey = CacheKeys.mentorAvailability(mentorId, weekStart)
       const cached = cache.get(cacheKey)
-      if (cached) { res.locals.cached = true; return res.json(cached) }
+      if (cached) {
+        res.locals.cached = true
+        return res.json(cached)
+      }
 
       const mentor = await db
         .select()

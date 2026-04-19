@@ -117,7 +117,8 @@ export async function getMentorDetailsById(mentorId: string) {
   const key = `mentor:details:${mentorId}`
 
   const cached = await cache.get(key)
-  if (cached) return { ...(cached as Record<string, any>), _cached: true as const }
+  if (cached)
+    return { ...(cached as Record<string, any>), _cached: true as const }
 
   const data = await db
     .select({
@@ -167,7 +168,8 @@ export async function getMentorDetailsByUserId(userId: string) {
   const key = `mentor:details:user:${userId}`
 
   const cached = await cache.get(key)
-  if (cached) return { ...(cached as Record<string, any>), _cached: true as const }
+  if (cached)
+    return { ...(cached as Record<string, any>), _cached: true as const }
 
   const data = await db
     .select({
