@@ -11,7 +11,7 @@ declare global {
         email: string
         name?: string | null
         image?: string | null
-        role?: string
+        role?: string | null | undefined
         onboardingComplete?: boolean
         emailVerified: boolean
         createdAt: Date
@@ -32,7 +32,7 @@ declare global {
 export async function requireAuth(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> {
   try {
     const session = await auth.api.getSession({
@@ -47,7 +47,11 @@ export async function requireAuth(
       return
     }
 
-    req.user = session.user
+    req.user = {
+      ...session.user,
+      role: session.user.role ?? undefined,
+      onboardingComplete: session.user.onboardingComplete ?? undefined,
+    }
     req.session = session.session
     next()
   } catch (error) {
